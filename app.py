@@ -23,28 +23,29 @@ def translate():
         source_language = data['source_language']
         target_language = data['target_language']
 
-        # OpenAI API를 사용하여 번역
-        response = client.chat.completions.create(
+        # 번역
+        translation_response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": f"You are a translator. Translate the given text from {source_language} to {target_language}. Provide only the direct translation without any additional text or punctuation."},
                 {"role": "user", "content": text}
             ]
         )
+        translation = translation_response.choices[0].message.content.strip()
 
-        # 번역된 텍스트 추출
-        translation = response.choices[0].message.content.strip()
+        # 뉘앙스 해석
+        if source_language == '한국어':
+            interpretation_prompt = f"다음 영어 문장의 뉘앙스를 한국어로 설명해주세요: '{translation}'"
+        else:
+            interpretation_prompt = f"다음 영어 문장의 뉘앙스를 한국어로 설명해주세요: '{text}'"
 
-        # 뉘앙스와 해석을 위한 두 번째 API 호출 (항상 한국어로)
         interpretation_response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "당신은 번역의 뉘앙스와 해석을 제공하는 도우미입니다. 항상 한국어로 설명해주세요."},
-                {"role": "user", "content": f"원문: '{text}'\n번역: '{translation}'\n이 번역에 대한 뉘앙스와 해석을 한국어로 설명해주세요."}
+                {"role": "system", "content": "당신은 영어 문장의 뉘앙스를 한국어로 설명하는 전문가입니다."},
+                {"role": "user", "content": interpretation_prompt}
             ]
         )
-
-        # 뉘앙스와 해석 추출
         interpretation = interpretation_response.choices[0].message.content.strip()
 
         return jsonify({

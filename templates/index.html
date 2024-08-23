@@ -11,6 +11,7 @@
         --background-color: #f5f5f5;
         --text-color: #333;
         --border-color: #ddd;
+        --delete-color: #e74c3c;
       }
 
       body {
@@ -31,7 +32,8 @@
         padding: 20px;
       }
 
-      h1 {
+      h1,
+      h2 {
         text-align: center;
         color: var(--primary-color);
         margin-bottom: 30px;
@@ -101,6 +103,7 @@
         border-radius: 4px;
         cursor: pointer;
         transition: background-color 0.3s ease;
+        margin-right: 10px;
       }
 
       button:hover {
@@ -120,10 +123,100 @@
         color: var(--primary-color);
       }
 
+      #translationHistory {
+        margin-top: 40px;
+        border-top: 2px solid var(--primary-color);
+        padding-top: 20px;
+      }
+
+      .translation-date {
+        font-weight: bold;
+        margin-top: 20px;
+        color: var(--primary-color);
+      }
+
+      .translation-record {
+        background-color: #f9f9f9;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        padding: 15px;
+        margin-bottom: 15px;
+        cursor: pointer;
+        position: relative;
+      }
+
+      .interpretation {
+        display: none;
+        margin-top: 10px;
+        padding: 10px;
+        background-color: #e9ecef;
+        border-radius: 4px;
+      }
+
+      .delete-btn {
+        position: absolute;
+        top: 5px;
+        right: 5px;
+        background-color: var(--delete-color);
+        color: white;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+
+      .delete-btn:hover {
+        background-color: #c0392b;
+      }
+
       @media (max-width: 600px) {
         .translation-area {
           flex-direction: column;
         }
+      }
+
+      #dateButtons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 15px;
+      }
+
+      .date-button {
+        background-color: var(--primary-color);
+        color: white;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+      }
+
+      .date-button:hover {
+        background-color: var(--secondary-color);
+      }
+
+      .date-button.active {
+        background-color: var(--secondary-color);
+      }
+
+      #notification {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background-color: var(--primary-color);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 4px;
+        display: none;
+        opacity: 0;
+        transition: opacity 0.3s ease-in-out;
+      }
+
+      #notification.show {
+        display: block;
+        opacity: 1;
       }
     </style>
   </head>
@@ -148,12 +241,22 @@
       </div>
       <button id="translateBtn">번역</button>
       <button id="copyButton" style="display: none">복사</button>
+      <button id="clearButton">지우기</button>
       <div id="interpretation">
         <h3>영어 문장 뉘앙스 설명 (한국어)</h3>
         <p id="interpretationContent"></p>
       </div>
+
+      <div id="translationHistory">
+        <h2>번역 기록</h2>
+        <div id="dateButtons"></div>
+        <div id="historyContent"></div>
+      </div>
     </div>
 
+    <div id="notification">번역 결과가 클립보드에 복사되었습니다.</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/shake.js/1.2.2/shake.min.js"></script>
     <script>
       let translationResult = "";
       let currentSourceLang = "한국어";
@@ -162,12 +265,33 @@
       document.addEventListener("DOMContentLoaded", function () {
         const translateBtn = document.getElementById("translateBtn");
         const copyButton = document.getElementById("copyButton");
+        const clearButton = document.getElementById("clearButton");
         const languageToggle = document.getElementById("languageToggle");
+        const sourceText = document.getElementById("sourceText");
 
         translateBtn.addEventListener("click", translate);
         copyButton.addEventListener("click", copyTranslation);
+        clearButton.addEventListener("click", clearText);
         languageToggle.addEventListener("click", toggleLanguages);
+
+        // 핸드폰 흔들기 감지 기능
+        if (typeof Shake === "function") {
+          var shakeEvent = new Shake({ threshold: 15 });
+          shakeEvent.start();
+
+          window.addEventListener("shake", clearText, false);
+        }
+
+        // 페이지 로드 시 번역 기록 가져오기
+        fetchTranslationHistory();
       });
+
+      function clearText() {
+        document.getElementById("sourceText").value = "";
+        document.getElementById("result").innerText = "";
+        document.getElementById("interpretationContent").innerText = "";
+        document.getElementById("copyButton").style.display = "none";
+      }
 
       function toggleLanguages(event) {
         if (event.target.classList.contains("langBox")) {
@@ -224,6 +348,9 @@
           resultDiv.innerText = translationResult;
           copyButton.style.display = "inline";
           interpretationContent.innerText = data.interpretation;
+
+          // 번역 후 번역 기록 업데이트
+          fetchTranslationHistory();
         } catch (error) {
           resultDiv.innerText = "번역 중 오류가 발생했습니다.";
           console.error("Error:", error);
@@ -234,11 +361,155 @@
         navigator.clipboard
           .writeText(translationResult)
           .then(() => {
-            alert("번역 결과가 클립보드에 복사되었습니다.");
+            showNotification("번역 결과가 클립보드에 복사되었습니다.");
           })
           .catch((err) => {
             console.error("복사 중 오류 발생:", err);
+            showNotification("복사 중 오류가 발생했습니다.");
           });
+      }
+
+      function showNotification(message) {
+        const notification = document.getElementById("notification");
+        notification.textContent = message;
+        notification.classList.add("show");
+        setTimeout(() => {
+          notification.classList.remove("show");
+        }, 3000); // 3초 후 알림 숨김
+      }
+
+      async function fetchTranslationHistory() {
+        try {
+          const response = await fetch("/get_translations");
+          const data = await response.json();
+          if (data.error) {
+            throw new Error(data.error);
+          }
+          createDateButtons(data.translations);
+        } catch (error) {
+          console.error("번역 기록을 가져오는 중 오류가 발생했습니다:", error);
+        }
+      }
+
+      function createDateButtons(translations) {
+        const dateButtons = document.getElementById("dateButtons");
+        dateButtons.innerHTML = "";
+        Object.keys(translations).forEach((date) => {
+          const button = document.createElement("button");
+          button.textContent = date;
+          button.className = "date-button";
+          button.setAttribute("data-date", date);
+          button.addEventListener("click", () =>
+            toggleTranslations(date, translations[date], button)
+          );
+          dateButtons.appendChild(button);
+        });
+      }
+
+      function toggleTranslations(date, translations, button) {
+        const historyContent = document.getElementById("historyContent");
+        if (button.classList.contains("active")) {
+          button.classList.remove("active");
+          historyContent.innerHTML = "";
+        } else {
+          // 모든 버튼의 active 클래스 제거
+          document
+            .querySelectorAll(".date-button")
+            .forEach((btn) => btn.classList.remove("active"));
+          button.classList.add("active");
+          displayTranslations(date, translations);
+        }
+      }
+
+      function displayTranslations(date, translations) {
+        const historyContent = document.getElementById("historyContent");
+        historyContent.innerHTML = "";
+
+        const dateDiv = document.createElement("div");
+        dateDiv.className = "translation-date";
+        dateDiv.textContent = date;
+        dateDiv.setAttribute("data-date", date);
+        historyContent.appendChild(dateDiv);
+
+        translations.forEach((translation) => {
+          const recordDiv = document.createElement("div");
+          recordDiv.className = "translation-record";
+          recordDiv.setAttribute("data-id", translation.id);
+          recordDiv.setAttribute("data-date", date);
+          recordDiv.innerHTML = `
+            <p><strong>${translation.source_language}:</strong> ${translation.source_text}</p>
+            <p><strong>${translation.target_language}:</strong> ${translation.translated_text}</p>
+            <div class="interpretation" style="display: none;">
+              <p><strong>뉘앙스 해석:</strong> ${translation.interpretation}</p>
+            </div>
+            <button class="delete-btn" data-id="${translation.id}">삭제</button>
+          `;
+          recordDiv.addEventListener("click", function (e) {
+            if (!e.target.classList.contains("delete-btn")) {
+              const interpretation = this.querySelector(".interpretation");
+              interpretation.style.display =
+                interpretation.style.display === "none" ? "block" : "none";
+            }
+          });
+
+          const deleteBtn = recordDiv.querySelector(".delete-btn");
+          deleteBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            deleteTranslation(translation.id, date);
+          });
+
+          historyContent.appendChild(recordDiv);
+        });
+      }
+
+      async function deleteTranslation(id, date) {
+        if (confirm("이 번역 기록을 삭제하시겠습니까?")) {
+          try {
+            const response = await fetch(`/delete_translation/${id}`, {
+              method: "DELETE",
+            });
+            if (response.ok) {
+              removeTranslationFromUI(id, date);
+              showNotification("번역 기록이 삭제되었습니다.");
+            } else {
+              throw new Error("삭제 실패");
+            }
+          } catch (error) {
+            console.error("삭제 중 오류 발생:", error);
+            showNotification("삭제 중 오류가 발생했습니다.");
+          }
+        }
+      }
+
+      function removeTranslationFromUI(id, date) {
+        const historyContent = document.getElementById("historyContent");
+        const translationRecord = historyContent.querySelector(
+          `.translation-record[data-id="${id}"]`
+        );
+        if (translationRecord) {
+          translationRecord.remove();
+
+          // 해당 날짜의 모든 번역 기록이 삭제되었는지 확인
+          const dateRecords = historyContent.querySelectorAll(
+            `.translation-record[data-date="${date}"]`
+          );
+          if (dateRecords.length === 0) {
+            // 날짜 표시도 제거
+            const dateDiv = historyContent.querySelector(
+              `.translation-date[data-date="${date}"]`
+            );
+            if (dateDiv) {
+              dateDiv.remove();
+            }
+            // 날짜 버튼도 제거
+            const dateButton = document.querySelector(
+              `.date-button[data-date="${date}"]`
+            );
+            if (dateButton) {
+              dateButton.remove();
+            }
+          }
+        }
       }
     </script>
   </body>

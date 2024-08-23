@@ -1,9 +1,11 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import sqlite3
 from datetime import datetime
+import json
+import io
 
 app = Flask(__name__)
 
@@ -130,6 +132,41 @@ def delete_translation(id):
     except Exception as e:
         app.logger.error(f"An error occurred while deleting translation: {str(e)}")
         return jsonify({'error': '번역 기록 삭제 중 오류가 발생했습니다.'}), 500
+
+@app.route('/export_db', methods=['GET'])
+def export_db():
+    try:
+        conn = sqlite3.connect('translations.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM translations")
+        rows = cursor.fetchall()
+        conn.close()
+
+        # 컬럼 이름 가져오기
+        column_names = [description[0] for description in cursor.description]
+
+        # 결과를 딕셔너리 리스트로 변환
+        data = []
+        for row in rows:
+            data.append(dict(zip(column_names, row)))
+
+        # JSON으로 변환
+        json_data = json.dumps(data, ensure_ascii=False, indent=2)
+
+        # 메모리 내 파일 객체 생성
+        mem = io.BytesIO()
+        mem.write(json_data.encode('utf-8'))
+        mem.seek(0)
+
+        return send_file(
+            mem,
+            as_attachment=True,
+            download_name='translations_backup.json',
+            mimetype='application/json'
+        )
+    except Exception as e:
+        app.logger.error(f"데이터베이스 추출 중 오류 발생: {str(e)}")
+        return jsonify({'error': '데이터베이스 추출 중 오류가 발생했습니다.'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)

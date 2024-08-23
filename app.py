@@ -4,8 +4,9 @@ from dotenv import load_dotenv
 import os
 import sqlite3
 from datetime import datetime
-import json
+import shutil
 import io
+import tempfile
 
 app = Flask(__name__)
 
@@ -135,38 +136,41 @@ def delete_translation(id):
 
 @app.route('/export_db', methods=['GET'])
 def export_db():
+    temp_file_path = None
     try:
-        conn = sqlite3.connect('translations.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM translations")
-        rows = cursor.fetchall()
-        conn.close()
+        # 원본 데이터베이스 연결
+        src_conn = sqlite3.connect('translations.db')
+        
+        # 임시 파일 생성
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
+        temp_file_path = temp_file.name
+        temp_file.close()
 
-        # 컬럼 이름 가져오기
-        column_names = [description[0] for description in cursor.description]
+        # 임시 파일에 데이터베이스 복사
+        dst_conn = sqlite3.connect(temp_file_path)
+        src_conn.backup(dst_conn)
 
-        # 결과를 딕셔너리 리스트로 변환
-        data = []
-        for row in rows:
-            data.append(dict(zip(column_names, row)))
-
-        # JSON으로 변환
-        json_data = json.dumps(data, ensure_ascii=False, indent=2)
-
-        # 메모리 내 파일 객체 생성
-        mem = io.BytesIO()
-        mem.write(json_data.encode('utf-8'))
-        mem.seek(0)
+        # 연결 종료
+        src_conn.close()
+        dst_conn.close()
 
         return send_file(
-            mem,
+            temp_file_path,
             as_attachment=True,
-            download_name='translations_backup.json',
-            mimetype='application/json'
+            download_name='translations_backup.db',
+            mimetype='application/x-sqlite3'
         )
     except Exception as e:
         app.logger.error(f"데이터베이스 추출 중 오류 발생: {str(e)}")
         return jsonify({'error': '데이터베이스 추출 중 오류가 발생했습니다.'}), 500
+    finally:
+        # 임시 파일 삭제
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+            except Exception as e:
+                app.logger.error(f"임시 파일 삭제 중 오류 발생: {str(e)}")
+
 
 if __name__ == '__main__':
     app.run(debug=True)

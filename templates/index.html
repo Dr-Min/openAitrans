@@ -218,6 +218,21 @@
         display: block;
         opacity: 1;
       }
+
+      #exportDBBtn {
+        background-color: #27ae60;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+        margin-top: 20px;
+      }
+
+      #exportDBBtn:hover {
+        background-color: #2ecc71;
+      }
     </style>
   </head>
   <body>
@@ -252,6 +267,8 @@
         <div id="dateButtons"></div>
         <div id="historyContent"></div>
       </div>
+
+      <button id="exportDBBtn">데이터베이스 추출</button>
     </div>
 
     <div id="notification">번역 결과가 클립보드에 복사되었습니다.</div>
@@ -268,11 +285,13 @@
         const clearButton = document.getElementById("clearButton");
         const languageToggle = document.getElementById("languageToggle");
         const sourceText = document.getElementById("sourceText");
+        const exportDBBtn = document.getElementById("exportDBBtn");
 
         translateBtn.addEventListener("click", translate);
         copyButton.addEventListener("click", copyTranslation);
         clearButton.addEventListener("click", clearText);
         languageToggle.addEventListener("click", toggleLanguages);
+        exportDBBtn.addEventListener("click", exportDatabase);
 
         // 핸드폰 흔들기 감지 기능
         if (typeof Shake === "function") {
@@ -510,6 +529,10 @@
             }
           }
         }
+      }
+
+      function exportDatabase() {
+        window.location.href = "/export_db";
       }
     </script>
   </body>

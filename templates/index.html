@@ -233,11 +233,29 @@
       #exportDBBtn:hover {
         background-color: #2ecc71;
       }
+
+      #logoutBtn {
+        background-color: #e74c3c;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+        position: absolute;
+        top: 20px;
+        right: 20px;
+      }
+
+      #logoutBtn:hover {
+        background-color: #c0392b;
+      }
     </style>
   </head>
   <body>
     <div class="container">
       <h1>한영 번역 서비스</h1>
+      <button id="logoutBtn">로그아웃</button>
       <div id="languageToggle">
         <div id="sourceLang" class="langBox active">한국어</div>
         <div id="arrow">→</div>
@@ -286,12 +304,14 @@
         const languageToggle = document.getElementById("languageToggle");
         const sourceText = document.getElementById("sourceText");
         const exportDBBtn = document.getElementById("exportDBBtn");
+        const logoutBtn = document.getElementById("logoutBtn");
 
         translateBtn.addEventListener("click", translate);
         copyButton.addEventListener("click", copyTranslation);
         clearButton.addEventListener("click", clearText);
         languageToggle.addEventListener("click", toggleLanguages);
         exportDBBtn.addEventListener("click", exportDatabase);
+        logoutBtn.addEventListener("click", logout);
 
         // 핸드폰 흔들기 감지 기능
         if (typeof Shake === "function") {
@@ -361,7 +381,16 @@
             }),
           });
 
+          if (response.status === 401) {
+            window.location.href = "/login";
+            return;
+          }
+
           const data = await response.json();
+
+          if (data.error) {
+            throw new Error(data.error);
+          }
 
           translationResult = data.translation;
           resultDiv.innerText = translationResult;
@@ -400,6 +429,10 @@
       async function fetchTranslationHistory() {
         try {
           const response = await fetch("/get_translations");
+          if (response.status === 401) {
+            window.location.href = "/login";
+            return;
+          }
           const data = await response.json();
           if (data.error) {
             throw new Error(data.error);
@@ -487,6 +520,10 @@
             const response = await fetch(`/delete_translation/${id}`, {
               method: "DELETE",
             });
+            if (response.status === 401) {
+              window.location.href = "/login";
+              return;
+            }
             if (response.ok) {
               removeTranslationFromUI(id, date);
               showNotification("번역 기록이 삭제되었습니다.");
@@ -531,8 +568,40 @@
         }
       }
 
-      function exportDatabase() {
-        window.location.href = "/export_db";
+      async function exportDatabase() {
+        try {
+          const response = await fetch("/export_db");
+          if (response.status === 401) {
+            window.location.href = "/login";
+            return;
+          }
+          if (response.ok) {
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.style.display = "none";
+            a.href = url;
+            a.download = "translations_backup.db";
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            showNotification("데이터베이스가 성공적으로 추출되었습니다.");
+          } else {
+            throw new Error("데이터베이스 추출 실패");
+          }
+        } catch (error) {
+          console.error("데이터베이스 추출 중 오류 발생:", error);
+          showNotification("데이터베이스 추출 중 오류가 발생했습니다.");
+        }
+      }
+
+      function logout() {
+        fetch("/logout", {
+          method: "GET",
+          credentials: "same-origin",
+        }).then(() => {
+          window.location.href = "/login";
+        });
       }
     </script>
   </body>

@@ -1,13 +1,15 @@
-from flask import Flask, render_template, request, jsonify, send_file, session, redirect, url_for, g
-from openai import OpenAI
-from dotenv import load_dotenv
 import os
-import sqlite3
-from datetime import datetime
-import tempfile
-from werkzeug.security import generate_password_hash, check_password_hash
 import secrets
+import sqlite3
+import tempfile
 import traceback
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+
+from dotenv import load_dotenv
+from flask import Flask, g, jsonify, redirect, render_template, request, send_file, session, url_for
+from openai import OpenAI
+from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
@@ -17,6 +19,9 @@ load_dotenv()
 
 # OpenAI 클라이언트 초기화
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+# 스레드 풀 생성
+executor = ThreadPoolExecutor(max_workers=5)
 
 # 데이터베이스 연결
 def get_db():
@@ -33,30 +38,38 @@ def close_db(error):
 # 데이터베이스 초기화
 def init_db():
     db = get_db()
-    db.executescript('''
-        DROP TABLE IF EXISTS users;
-        CREATE TABLE users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL
-        );
+    cursor = db.cursor()
+    try:
+        # users 테이블 생성
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL
+            )
+        ''')
 
-        DROP TABLE IF EXISTS translations;
-        CREATE TABLE translations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            source_text TEXT,
-            translated_text TEXT,
-            source_language TEXT,
-            target_language TEXT,
-            interpretation TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_user_id ON translations (user_id);
-    ''')
-    db.commit()
+        # translations 테이블 생성
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS translations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                source_text TEXT,
+                translated_text TEXT,
+                source_language TEXT,
+                target_language TEXT,
+                interpretation TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_id ON translations (user_id)')
+        
+        db.commit()
+        app.logger.info("Database initialized successfully.")
+    except sqlite3.Error as e:
+        app.logger.error(f"Database initialization error: {e}")
+        db.rollback()
 
 # 앱 시작 시 데이터베이스 초기화
 with app.app_context():
@@ -104,6 +117,34 @@ def logout():
     session.pop('user_id', None)
     return redirect(url_for('login'))
 
+def save_translation(user_id, source_text, translated_text, source_language, target_language, interpretation):
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT INTO translations (user_id, source_text, translated_text, source_language, target_language, interpretation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                  (user_id, source_text, translated_text, source_language, target_language, interpretation, datetime.now()))
+        db.commit()
+
+def translate_text(text, source_language, target_language):
+    translation_response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": f"You are a translator. Translate the given text from {source_language} to {target_language}. Provide only the direct translation without any additional text or punctuation."},
+            {"role": "user", "content": text}
+        ]
+    )
+    return translation_response.choices[0].message.content.strip()
+
+def interpret_text(text, target_language):
+    interpretation_prompt = f"다음 {target_language} 문장의 뉘앙스를 한국어로 설명해주세요: '{text}'"
+    interpretation_response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": f"당신은 {target_language} 문장의 뉘앙스를 한국어로 설명하는 전문가입니다."},
+            {"role": "user", "content": interpretation_prompt}
+        ]
+    )
+    return interpretation_response.choices[0].message.content.strip()
+
 @app.route('/translate', methods=['POST'])
 def translate():
     if 'user_id' not in session:
@@ -115,45 +156,23 @@ def translate():
         source_language = data['source_language']
         target_language = data['target_language']
 
-        # 번역
-        translation_response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": f"You are a translator. Translate the given text from {source_language} to {target_language}. Provide only the direct translation without any additional text or punctuation."},
-                {"role": "user", "content": text}
-            ]
-        )
-        translation = translation_response.choices[0].message.content.strip()
+        # 번역과 해석을 동시에 수행
+        translation_future = executor.submit(translate_text, text, source_language, target_language)
+        interpretation_future = executor.submit(interpret_text, text, target_language)
 
-        # 뉘앙스 해석
-        if source_language == '한국어':
-            interpretation_prompt = f"다음 영어 문장의 뉘앙스를 한국어로 설명해주세요: '{translation}'"
-        else:
-            interpretation_prompt = f"다음 영어 문장의 뉘앙스를 한국어로 설명해주세요: '{text}'"
-
-        interpretation_response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "당신은 영어 문장의 뉘앙스를 한국어로 설명하는 전문가입니다."},
-                {"role": "user", "content": interpretation_prompt}
-            ]
-        )
-        interpretation = interpretation_response.choices[0].message.content.strip()
+        translation = translation_future.result()
+        interpretation = interpretation_future.result()
 
         # 데이터베이스에 저장
-        db = get_db()
-        db.execute("INSERT INTO translations (user_id, source_text, translated_text, source_language, target_language, interpretation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                  (session['user_id'], text, translation, source_language, target_language, interpretation, datetime.now()))
-        db.commit()
+        executor.submit(save_translation, session['user_id'], text, translation, source_language, target_language, interpretation)
 
         return jsonify({
             'translation': translation,
             'interpretation': interpretation
         })
     except Exception as e:
-        error_message = f"An error occurred during translation: {str(e)}"
-        error_traceback = traceback.format_exc()
-        app.logger.error(f"{error_message}\n{error_traceback}")
+        app.logger.error(f"Translation error: {str(e)}")
+        app.logger.error(traceback.format_exc())
         return jsonify({'error': '번역 중 오류가 발생했습니다.'}), 500
 
 @app.route('/get_translations', methods=['GET'])
@@ -181,9 +200,8 @@ def get_translations():
 
         return jsonify({'translations': translations_by_date})
     except Exception as e:
-        error_message = f"An error occurred while fetching translations: {str(e)}"
-        error_traceback = traceback.format_exc()
-        app.logger.error(f"{error_message}\n{error_traceback}")
+        app.logger.error(f"Error fetching translations: {str(e)}")
+        app.logger.error(traceback.format_exc())
         return jsonify({'error': '번역 기록을 가져오는 중 오류가 발생했습니다.'}), 500
 
 @app.route('/delete_translation/<int:id>', methods=['DELETE'])
@@ -197,9 +215,8 @@ def delete_translation(id):
         db.commit()
         return jsonify({'message': '번역 기록이 삭제되었습니다.'}), 200
     except Exception as e:
-        error_message = f"An error occurred while deleting translation: {str(e)}"
-        error_traceback = traceback.format_exc()
-        app.logger.error(f"{error_message}\n{error_traceback}")
+        app.logger.error(f"Error deleting translation: {str(e)}")
+        app.logger.error(traceback.format_exc())
         return jsonify({'error': '번역 기록 삭제 중 오류가 발생했습니다.'}), 500
 
 @app.route('/export_db', methods=['GET'])
@@ -220,6 +237,7 @@ def export_db():
         
         dst_db.execute('''CREATE TABLE translations
                           (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                           user_id INTEGER,
                            source_text TEXT,
                            translated_text TEXT,
                            source_language TEXT,
@@ -228,8 +246,8 @@ def export_db():
                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
 
         # 사용자의 번역 기록 복사
-        translations = src_db.execute("SELECT source_text, translated_text, source_language, target_language, interpretation, created_at FROM translations WHERE user_id = ?", (session['user_id'],)).fetchall()
-        dst_db.executemany("INSERT INTO translations (source_text, translated_text, source_language, target_language, interpretation, created_at) VALUES (?, ?, ?, ?, ?, ?)", translations)
+        translations = src_db.execute("SELECT user_id, source_text, translated_text, source_language, target_language, interpretation, created_at FROM translations WHERE user_id = ?", (session['user_id'],)).fetchall()
+        dst_db.executemany("INSERT INTO translations (user_id, source_text, translated_text, source_language, target_language, interpretation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", translations)
 
         dst_db.commit()
         dst_db.close()
@@ -241,9 +259,8 @@ def export_db():
             mimetype='application/x-sqlite3'
         )
     except Exception as e:
-        error_message = f"데이터베이스 추출 중 오류 발생: {str(e)}"
-        error_traceback = traceback.format_exc()
-        app.logger.error(f"{error_message}\n{error_traceback}")
+        app.logger.error(f"Database export error: {str(e)}")
+        app.logger.error(traceback.format_exc())
         return jsonify({'error': '데이터베이스 추출 중 오류가 발생했습니다.'}), 500
     finally:
         # 임시 파일 삭제
@@ -251,7 +268,7 @@ def export_db():
             try:
                 os.remove(temp_file_path)
             except Exception as e:
-                app.logger.error(f"임시 파일 삭제 중 오류 발생: {str(e)}")
+                app.logger.error(f"Error deleting temporary file: {str(e)}")
 
 if __name__ == '__main__':
     app.run(debug=True)

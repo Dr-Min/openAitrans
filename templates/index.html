@@ -357,53 +357,50 @@
       }
 
       async function translate() {
-        const sourceText = document.getElementById("sourceText").value;
-        const resultDiv = document.getElementById("result");
-        const interpretationContent = document.getElementById(
-          "interpretationContent"
-        );
-        const copyButton = document.getElementById("copyButton");
+    const sourceText = document.getElementById("sourceText").value;
+    const resultDiv = document.getElementById("result");
+    const interpretationContent = document.getElementById("interpretationContent");
+    const copyButton = document.getElementById("copyButton");
 
-        resultDiv.innerText = "번역 중...";
-        interpretationContent.innerText = "";
-        copyButton.style.display = "none";
+    resultDiv.innerText = "번역 중...";
+    interpretationContent.innerText = "";
+    copyButton.style.display = "none";
 
-        try {
-          const response = await fetch("/translate", {
+    try {
+        const response = await fetch("/translate", {
             method: "POST",
             headers: {
-              "Content-Type": "application/json",
+                "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              text: sourceText,
-              source_language: currentSourceLang,
-              target_language: currentTargetLang,
+                text: sourceText,
+                source_language: currentSourceLang,
+                target_language: currentTargetLang,
             }),
-          });
+        });
 
-          if (response.status === 401) {
-            window.location.href = "/login";
-            return;
-          }
-
-          const data = await response.json();
-
-          if (data.error) {
-            throw new Error(data.error);
-          }
-
-          translationResult = data.translation;
-          resultDiv.innerText = translationResult;
-          copyButton.style.display = "inline";
-          interpretationContent.innerText = data.interpretation;
-
-          // 번역 후 번역 기록 업데이트
-          fetchTranslationHistory();
-        } catch (error) {
-          resultDiv.innerText = "번역 중 오류가 발생했습니다.";
-          console.error("Error:", error);
+        if (!response.ok) {
+            if (response.status === 401) {
+                window.location.href = "/login";
+                return;
+            }
+            const errorData = await response.json();
+            throw new Error(errorData.error || "서버 오류가 발생했습니다.");
         }
-      }
+
+        const data = await response.json();
+        translationResult = data.translation;
+        resultDiv.innerText = translationResult;
+        copyButton.style.display = "inline";
+        interpretationContent.innerText = data.interpretation;
+
+        fetchTranslationHistory();
+    } catch (error) {
+        resultDiv.innerText = `오류: ${error.message}`;
+        console.error("Error:", error);
+        showNotification(error.message);
+    }
+}
 
       function copyTranslation() {
         navigator.clipboard

@@ -131,7 +131,7 @@ def translate_text(text, source_language, target_language):
     translation_response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": "You are a professional translator specializing in nuanced and contextually accurate translations.(번역 결과에 따옴표를 넣지 마세요 예를 들어 "hello"가 아닌 hello로 출력합니다)},
+        {"role": "system", "content": "You are a professional translator specializing in nuanced and contextually accurate translations.(번역 결과에 따옴표를 넣지 마세요 예를 들어 'hello'가 아닌 hello로 출력합니다)"},
             {"role": "user", "content": translation_prompt}
         ]
     )
@@ -139,7 +139,7 @@ def translate_text(text, source_language, target_language):
 
 
 def interpret_text(text, target_language):
-    interpretation_prompt = f"다음 {target_language} 문장의 뉘앙스를 한국어로 설명해주세요(번역 결과에 따옴표를 넣지 마세요 예를 들어 "hello"가 아닌 hello로 출력합니다): '{text}'"
+    interpretation_prompt = f"다음 {target_language} 문장의 뉘앙스를 한국어로 설명해주세요: '{text}'"
     interpretation_response = client.chat.completions.create(
         model="gpt-4o",
         messages=[

@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 from flask import Flask, g, jsonify, redirect, render_template, request, send_file, session, url_for
 from openai import OpenAI
 from werkzeug.security import check_password_hash, generate_password_hash
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
@@ -125,14 +127,16 @@ def save_translation(user_id, source_text, translated_text, source_language, tar
         db.commit()
 
 def translate_text(text, source_language, target_language):
+    translation_prompt = f"Translate the following {source_language} text to {target_language}, providing a natural and accurate translation that captures the nuance and context: '{text}'"
     translation_response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": f"You are a translator. Translate the given text from {source_language} to {target_language}. Provide only the direct translation without any additional text or punctuation."},
-            {"role": "user", "content": text}
+            {"role": "system", "content": "You are a professional translator specializing in nuanced and contextually accurate translations."},
+            {"role": "user", "content": translation_prompt}
         ]
     )
     return translation_response.choices[0].message.content.strip()
+
 
 def interpret_text(text, target_language):
     interpretation_prompt = f"다음 {target_language} 문장의 뉘앙스를 한국어로 설명해주세요: '{text}'"
@@ -156,15 +160,21 @@ def translate():
         source_language = data['source_language']
         target_language = data['target_language']
 
-        # 번역과 해석을 동시에 수행
-        translation_future = executor.submit(translate_text, text, source_language, target_language)
-        interpretation_future = executor.submit(interpret_text, text, target_language)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            # 번역과 해석을 동시에 시작
+            translation_future = executor.submit(translate_text, text, source_language, target_language)
+            
+            # 번역 결과를 기다림
+            translation = translation_future.result()
+            
+            # 번역 결과를 이용해 해석 시작
+            interpretation_future = executor.submit(interpret_text, translation, target_language)
+            
+            # 해석 결과를 기다림
+            interpretation = interpretation_future.result()
 
-        translation = translation_future.result()
-        interpretation = interpretation_future.result()
-
-        # 데이터베이스에 저장
-        executor.submit(save_translation, session['user_id'], text, translation, source_language, target_language, interpretation)
+            # 데이터베이스에 저장 (동기적으로 수행)
+            save_translation(session['user_id'], text, translation, source_language, target_language, interpretation)
 
         return jsonify({
             'translation': translation,

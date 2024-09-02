@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 from flask import Flask, g, jsonify, redirect, render_template, request, send_file, session, url_for
 from openai import OpenAI
 from werkzeug.security import check_password_hash, generate_password_hash
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
@@ -66,9 +68,9 @@ def init_db():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_id ON translations (user_id)')
         
         db.commit()
-        app.logger.info("데이터베이스가 성공적으로 초기화되었습니다.")
+        app.logger.info("Database initialized successfully.")
     except sqlite3.Error as e:
-        app.logger.error(f"데이터베이스 초기화 오류: {e}")
+        app.logger.error(f"Database initialization error: {e}")
         db.rollback()
 
 # 앱 시작 시 데이터베이스 초기화
@@ -94,7 +96,7 @@ def register():
             db.commit()
             return redirect(url_for('login'))
         except sqlite3.IntegrityError:
-            return "이미 존재하는 사용자명입니다"
+            return "Username already exists"
     return render_template('register.html')
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -109,7 +111,7 @@ def login():
         if user and check_password_hash(user['password'], password):
             session['user_id'] = user['id']
             return redirect(url_for('index'))
-        return "잘못된 사용자명 또는 비밀번호입니다"
+        return "Invalid username or password"
     return render_template('login.html')
 
 @app.route('/logout')
@@ -125,20 +127,21 @@ def save_translation(user_id, source_text, translated_text, source_language, tar
         db.commit()
 
 def translate_text(text, source_language, target_language):
-    translation_prompt = f"다음 {source_language} 텍스트를 {target_language}로 번역하되, 뉘앙스와 문맥을 정확하게 반영하여 자연스럽게 번역해주세요: '{text}'"
+    translation_prompt = f"Translate the following {source_language} text to {target_language}, providing a natural and accurate translation that captures the nuance and context: '{text}'"
     translation_response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=[
-            {"role": "system", "content": "당신은 뉘앙스와 문맥을 정확히 파악하여 번역하는 전문 번역가입니다."},
+            {"role": "system", "content": "You are a professional translator specializing in nuanced and contextually accurate translations.(번역 결과에 따옴표를 넣지 마세요. 예를 들어 "hello."가 아닌 hello로 출력합니다)},
             {"role": "user", "content": translation_prompt}
         ]
     )
     return translation_response.choices[0].message.content.strip()
 
+
 def interpret_text(text, target_language):
-    interpretation_prompt = f"다음 {target_language} 문장의 뉘앙스를 한국어로 설명해주세요: '{text}'"
+    interpretation_prompt = f"다음 {target_language} 문장의 뉘앙스를 한국어로 설명해주세요(번역 결과에 따옴표를 넣지 마세요. 예를 들어 "hello."가 아닌 hello로 출력합니다): '{text}'"
     interpretation_response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": f"당신은 {target_language} 문장의 뉘앙스를 한국어로 설명하는 전문가입니다."},
             {"role": "user", "content": interpretation_prompt}
@@ -149,7 +152,7 @@ def interpret_text(text, target_language):
 @app.route('/translate', methods=['POST'])
 def translate():
     if 'user_id' not in session:
-        return jsonify({'error': '사용자 인증이 필요합니다'}), 401
+        return jsonify({'error': 'User not authenticated'}), 401
     
     try:
         data = request.json
@@ -178,14 +181,14 @@ def translate():
             'interpretation': interpretation
         })
     except Exception as e:
-        app.logger.error(f"번역 오류: {str(e)}")
+        app.logger.error(f"Translation error: {str(e)}")
         app.logger.error(traceback.format_exc())
         return jsonify({'error': '번역 중 오류가 발생했습니다.'}), 500
 
 @app.route('/get_translations', methods=['GET'])
 def get_translations():
     if 'user_id' not in session:
-        return jsonify({'error': '사용자 인증이 필요합니다'}), 401
+        return jsonify({'error': 'User not authenticated'}), 401
     
     try:
         db = get_db()
@@ -207,14 +210,14 @@ def get_translations():
 
         return jsonify({'translations': translations_by_date})
     except Exception as e:
-        app.logger.error(f"번역 기록 조회 오류: {str(e)}")
+        app.logger.error(f"Error fetching translations: {str(e)}")
         app.logger.error(traceback.format_exc())
         return jsonify({'error': '번역 기록을 가져오는 중 오류가 발생했습니다.'}), 500
 
 @app.route('/delete_translation/<int:id>', methods=['DELETE'])
 def delete_translation(id):
     if 'user_id' not in session:
-        return jsonify({'error': '사용자 인증이 필요합니다'}), 401
+        return jsonify({'error': 'User not authenticated'}), 401
     
     try:
         db = get_db()
@@ -222,14 +225,14 @@ def delete_translation(id):
         db.commit()
         return jsonify({'message': '번역 기록이 삭제되었습니다.'}), 200
     except Exception as e:
-        app.logger.error(f"번역 기록 삭제 오류: {str(e)}")
+        app.logger.error(f"Error deleting translation: {str(e)}")
         app.logger.error(traceback.format_exc())
         return jsonify({'error': '번역 기록 삭제 중 오류가 발생했습니다.'}), 500
 
 @app.route('/export_db', methods=['GET'])
 def export_db():
     if 'user_id' not in session:
-        return jsonify({'error': '사용자 인증이 필요합니다'}), 401
+        return jsonify({'error': 'User not authenticated'}), 401
     
     temp_file_path = None
     try:
@@ -266,7 +269,7 @@ def export_db():
             mimetype='application/x-sqlite3'
         )
     except Exception as e:
-        app.logger.error(f"데이터베이스 추출 오류: {str(e)}")
+        app.logger.error(f"Database export error: {str(e)}")
         app.logger.error(traceback.format_exc())
         return jsonify({'error': '데이터베이스 추출 중 오류가 발생했습니다.'}), 500
     finally:
@@ -275,7 +278,7 @@ def export_db():
             try:
                 os.remove(temp_file_path)
             except Exception as e:
-                app.logger.error(f"임시 파일 삭제 오류: {str(e)}")
+                app.logger.error(f"Error deleting temporary file: {str(e)}")
 
 if __name__ == '__main__':
     app.run(debug=True)

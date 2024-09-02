@@ -126,7 +126,7 @@ def save_translation(user_id, source_text, translated_text, source_language, tar
 
 def translate_text(text, source_language, target_language):
     translation_response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": f"You are a translator. Translate the given text from {source_language} to {target_language}. Provide only the direct translation without any additional text or punctuation."},
             {"role": "user", "content": text}
@@ -137,7 +137,7 @@ def translate_text(text, source_language, target_language):
 def interpret_text(text, target_language):
     interpretation_prompt = f"다음 {target_language} 문장의 뉘앙스를 한국어로 설명해주세요: '{text}'"
     interpretation_response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": f"당신은 {target_language} 문장의 뉘앙스를 한국어로 설명하는 전문가입니다."},
             {"role": "user", "content": interpretation_prompt}

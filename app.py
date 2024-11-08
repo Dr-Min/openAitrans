@@ -168,27 +168,34 @@ def translate():
         source_language = data['source_language']
         target_language = data['target_language']
 
+        app.logger.info(f"Starting translation request: {text[:100]}...")
+
         with ThreadPoolExecutor(max_workers=2) as executor:
-            # 번역 시작
-            translation_future = executor.submit(translate_text, text, source_language, target_language)
-            
-            # 영어->한국어: 원문(영어) 텍스트로 뉘앑스 해석
-            # 한국어->영어: 번역 완료를 기다렸다가 번역된 영어로 뉘앑스 해석
-            if source_language == "영어":
-                # 영어 원문으로 바로 뉘앑스 해석 시작
-                interpretation_future = executor.submit(interpret_text, text, source_language, target_language)
-            else:
-                # 번역 결과를 기다림
-                translation = translation_future.result()
-                # 번역된 영어로 뉘앑스 해석 시작
-                interpretation_future = executor.submit(interpret_text, translation, source_language, target_language)
+            try:
+                # 번역 시작
+                translation_future = executor.submit(translate_text, text, source_language, target_language)
+                
+                if source_language == "영어":
+                    # 영어 원문으로 바로 뉘앑스 해석 시작
+                    interpretation_future = executor.submit(interpret_text, text, source_language, target_language)
+                    # 번역 결과 대기
+                    translation = translation_future.result()
+                else:
+                    # 번역 결과를 기다림
+                    translation = translation_future.result()
+                    # 번역된 영어로 뉘앑스 해석 시작
+                    interpretation_future = executor.submit(interpret_text, translation, source_language, target_language)
 
-            # 모든 결과 수집
-            translation = translation_future.result() if source_language != "영어" else translation
-            interpretation = interpretation_future.result()
+                # 해석 결과 대기
+                interpretation = interpretation_future.result()
 
-            # 데이터베이스에 저장
-            save_translation(session['user_id'], text, translation, source_language, target_language, interpretation)
+                # 데이터베이스에 저장
+                save_translation(session['user_id'], text, translation, source_language, target_language, interpretation)
+
+            except Exception as e:
+                app.logger.error(f"Error in executor: {str(e)}")
+                app.logger.error(traceback.format_exc())
+                raise
 
         return jsonify({
             'translation': translation,
@@ -197,7 +204,7 @@ def translate():
     except Exception as e:
         app.logger.error(f"Translation error: {str(e)}")
         app.logger.error(traceback.format_exc())
-        return jsonify({'error': '번역 중 오류가 발생했습니다.'}), 500
+        return jsonify({'error': f'번역 중 오류가 발생했습니다: {str(e)}'}), 500
 
 @app.route('/get_translations', methods=['GET'])
 def get_translations():

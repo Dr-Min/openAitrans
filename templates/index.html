@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>한영 번역 서비스</title>
+    <link rel="manifest" href="/static/manifest.json" />
+    <meta name="theme-color" content="#3498db" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="번역기" />
+    <link rel="apple-touch-icon" href="/static/images/icon-192x192.png" />
     <style>
       :root {
         --primary-color: #3498db;
@@ -250,6 +256,22 @@
       #logoutBtn:hover {
         background-color: #c0392b;
       }
+
+      .month-select {
+        padding: 8px;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        margin-bottom: 20px;
+        width: 200px;
+        font-size: 14px;
+      }
+
+      .date-buttons-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 15px;
+      }
     </style>
   </head>
   <body>
@@ -282,7 +304,11 @@
 
       <div id="translationHistory">
         <h2>번역 기록</h2>
-        <div id="dateButtons"></div>
+        <div id="historyControls">
+          <select id="monthSelect" class="month-select">
+            <option value="">월 선택</option>
+          </select>
+        </div>
         <div id="historyContent"></div>
       </div>
 
@@ -323,6 +349,15 @@
 
         // 페이지 로드 시 번역 기록 가져오기
         fetchTranslationHistory();
+
+        // 엔터키 이벤트 리스너 추가
+        sourceText.addEventListener("keydown", function (event) {
+          // Shift + Enter는 줄바꿈 허용
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault(); // 기본 줄바꿈 동작 방지
+            translate(); // 번역 실행
+          }
+        });
       });
 
       function clearText() {
@@ -357,50 +392,52 @@
       }
 
       async function translate() {
-    const sourceText = document.getElementById("sourceText").value;
-    const resultDiv = document.getElementById("result");
-    const interpretationContent = document.getElementById("interpretationContent");
-    const copyButton = document.getElementById("copyButton");
+        const sourceText = document.getElementById("sourceText").value;
+        const resultDiv = document.getElementById("result");
+        const interpretationContent = document.getElementById(
+          "interpretationContent"
+        );
+        const copyButton = document.getElementById("copyButton");
 
-    resultDiv.innerText = "번역 중...";
-    interpretationContent.innerText = "";
-    copyButton.style.display = "none";
+        resultDiv.innerText = "번역 중...";
+        interpretationContent.innerText = "";
+        copyButton.style.display = "none";
 
-    try {
-        const response = await fetch("/translate", {
+        try {
+          const response = await fetch("/translate", {
             method: "POST",
             headers: {
-                "Content-Type": "application/json",
+              "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                text: sourceText,
-                source_language: currentSourceLang,
-                target_language: currentTargetLang,
+              text: sourceText,
+              source_language: currentSourceLang,
+              target_language: currentTargetLang,
             }),
-        });
+          });
 
-        if (!response.ok) {
+          if (!response.ok) {
             if (response.status === 401) {
-                window.location.href = "/login";
-                return;
+              window.location.href = "/login";
+              return;
             }
             const errorData = await response.json();
             throw new Error(errorData.error || "서버 오류가 발생했습니다.");
+          }
+
+          const data = await response.json();
+          translationResult = data.translation;
+          resultDiv.innerText = translationResult;
+          copyButton.style.display = "inline";
+          interpretationContent.innerText = data.interpretation;
+
+          fetchTranslationHistory();
+        } catch (error) {
+          resultDiv.innerText = `오류: ${error.message}`;
+          console.error("Error:", error);
+          showNotification(error.message);
         }
-
-        const data = await response.json();
-        translationResult = data.translation;
-        resultDiv.innerText = translationResult;
-        copyButton.style.display = "inline";
-        interpretationContent.innerText = data.interpretation;
-
-        fetchTranslationHistory();
-    } catch (error) {
-        resultDiv.innerText = `오류: ${error.message}`;
-        console.error("Error:", error);
-        showNotification(error.message);
-    }
-}
+      }
 
       function copyTranslation() {
         navigator.clipboard
@@ -434,65 +471,99 @@
           if (data.error) {
             throw new Error(data.error);
           }
-          createDateButtons(data.translations);
+          updateMonthSelect(data.translations);
         } catch (error) {
           console.error("번역 기록을 가져오는 중 오류가 발생했습니다:", error);
         }
       }
 
-      function createDateButtons(translations) {
-        const dateButtons = document.getElementById("dateButtons");
-        dateButtons.innerHTML = "";
-        Object.keys(translations).forEach((date) => {
-          const button = document.createElement("button");
-          button.textContent = date;
-          button.className = "date-button";
-          button.setAttribute("data-date", date);
-          button.addEventListener("click", () =>
-            toggleTranslations(date, translations[date], button)
-          );
-          dateButtons.appendChild(button);
-        });
-      }
+      function updateMonthSelect(translations) {
+        const monthSelect = document.getElementById("monthSelect");
+        monthSelect.innerHTML = '<option value="">월 선택</option>';
 
-      function toggleTranslations(date, translations, button) {
-        const historyContent = document.getElementById("historyContent");
-        if (button.classList.contains("active")) {
-          button.classList.remove("active");
-          historyContent.innerHTML = "";
-        } else {
-          // 모든 버튼의 active 클래스 제거
-          document
-            .querySelectorAll(".date-button")
-            .forEach((btn) => btn.classList.remove("active"));
-          button.classList.add("active");
-          displayTranslations(date, translations);
+        // 월 목록 생성
+        const months = Object.keys(translations).sort().reverse();
+        months.forEach((month) => {
+          const option = document.createElement("option");
+          const [year, monthNum] = month.split("-");
+          option.value = month;
+          option.textContent = `${year}년 ${monthNum}월`;
+          monthSelect.appendChild(option);
+        });
+
+        // 이벤트 리스너 추가
+        monthSelect.addEventListener("change", () => {
+          const selectedMonth = monthSelect.value;
+          if (selectedMonth) {
+            displayMonthTranslations(
+              selectedMonth,
+              translations[selectedMonth]
+            );
+          } else {
+            document.getElementById("historyContent").innerHTML = "";
+          }
+        });
+
+        // 가장 최근 월 자동 선택
+        if (months.length > 0) {
+          monthSelect.value = months[0];
+          displayMonthTranslations(months[0], translations[months[0]]);
         }
       }
 
-      function displayTranslations(date, translations) {
+      function displayMonthTranslations(month, monthData) {
         const historyContent = document.getElementById("historyContent");
         historyContent.innerHTML = "";
 
-        const dateDiv = document.createElement("div");
-        dateDiv.className = "translation-date";
-        dateDiv.textContent = date;
-        dateDiv.setAttribute("data-date", date);
-        historyContent.appendChild(dateDiv);
+        // 날짜 버튼들을 담을 컨테이너
+        const dateButtonsContainer = document.createElement("div");
+        dateButtonsContainer.className = "date-buttons-container";
+
+        // 날짜 정렬
+        const dates = Object.keys(monthData).sort().reverse();
+
+        // 날짜 버튼 생성
+        dates.forEach((date) => {
+          const button = document.createElement("button");
+          button.className = "date-button";
+          button.textContent = date.split("-")[2] + "일";
+          button.addEventListener("click", () => {
+            document
+              .querySelectorAll(".date-button")
+              .forEach((btn) => btn.classList.remove("active"));
+            button.classList.add("active");
+            displayDateTranslations(date, monthData[date]);
+          });
+          dateButtonsContainer.appendChild(button);
+        });
+
+        historyContent.appendChild(dateButtonsContainer);
+
+        // 첫 번째 날짜의 번역 기록 표시
+        if (dates.length > 0) {
+          dateButtonsContainer.firstChild.classList.add("active");
+          displayDateTranslations(dates[0], monthData[dates[0]]);
+        }
+      }
+
+      function displayDateTranslations(date, translations) {
+        const historyContent = document.getElementById("historyContent");
+        const translationsContainer = document.createElement("div");
+        translationsContainer.className = "translations-container";
 
         translations.forEach((translation) => {
           const recordDiv = document.createElement("div");
           recordDiv.className = "translation-record";
-          recordDiv.setAttribute("data-id", translation.id);
-          recordDiv.setAttribute("data-date", date);
           recordDiv.innerHTML = `
-            <p><strong>${translation.source_language}:</strong> ${translation.source_text}</p>
-            <p><strong>${translation.target_language}:</strong> ${translation.translated_text}</p>
-            <div class="interpretation" style="display: none;">
-              <p><strong>뉘앙스 해석:</strong> ${translation.interpretation}</p>
-            </div>
-            <button class="delete-btn" data-id="${translation.id}">삭제</button>
-          `;
+                <p><strong>${translation.source_language}:</strong> ${translation.source_text}</p>
+                <p><strong>${translation.target_language}:</strong> ${translation.translated_text}</p>
+                <div class="interpretation" style="display: none;">
+                    <p><strong>뉘앙스 해석:</strong> ${translation.interpretation}</p>
+                </div>
+                <button class="delete-btn" data-id="${translation.id}">삭제</button>
+            `;
+
+          // 클릭 이벤트 리스너 추가
           recordDiv.addEventListener("click", function (e) {
             if (!e.target.classList.contains("delete-btn")) {
               const interpretation = this.querySelector(".interpretation");
@@ -501,14 +572,24 @@
             }
           });
 
+          // 삭제 버튼 이벤트 리스너
           const deleteBtn = recordDiv.querySelector(".delete-btn");
           deleteBtn.addEventListener("click", (e) => {
             e.stopPropagation();
             deleteTranslation(translation.id, date);
           });
 
-          historyContent.appendChild(recordDiv);
+          translationsContainer.appendChild(recordDiv);
         });
+
+        // 기존 번역 기록 컨테이너 교체
+        const existingContainer = historyContent.querySelector(
+          ".translations-container"
+        );
+        if (existingContainer) {
+          existingContainer.remove();
+        }
+        historyContent.appendChild(translationsContainer);
       }
 
       async function deleteTranslation(id, date) {
@@ -598,6 +679,19 @@
           credentials: "same-origin",
         }).then(() => {
           window.location.href = "/login";
+        });
+      }
+
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker
+            .register("/static/service-worker.js")
+            .then((registration) => {
+              console.log("ServiceWorker registration successful");
+            })
+            .catch((err) => {
+              console.log("ServiceWorker registration failed: ", err);
+            });
         });
       }
     </script>

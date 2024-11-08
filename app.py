@@ -138,12 +138,20 @@ def translate_text(text, source_language, target_language):
     return translation_response.choices[0].message.content.strip()
 
 
-def interpret_text(text, target_language):
-    interpretation_prompt = f"다음 {target_language} 문장의 뉘앙스를 한국어로 설명해주세요: '{text}'"
+def interpret_text(text, source_language, target_language):
+    # 영어->한국어 번역일 경우: 영어 원문의 뉘앙스를 한국어로 설명
+    # 한국어->영어 번역일 경우: 영어 번역문의 뉘앙스를 한국어로 설명
+    if source_language == "영어":
+        interpretation_prompt = f"다음 영어 원문의 뉘앙스와 의미를 한국어로 자세히 설명해주세요. 왜 해당문장을 다음과 번역했는지도 설명해주세요: '{text}'"
+        system_content = "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."
+    else:
+        interpretation_prompt = f"다음 영어 번역문의 뉘앙스와 의미를 한국어로 자세히 설명해주세요 왜 해당문장을 다음과 번역했는지도 설명해주세요: '{text}'"
+        system_content = "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."
+
     interpretation_response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": f"당신은 {target_language} 문장의 뉘앙스를 한국어로 설명하는 전문가입니다."},
+            {"role": "system", "content": system_content},
             {"role": "user", "content": interpretation_prompt}
         ]
     )
@@ -161,19 +169,25 @@ def translate():
         target_language = data['target_language']
 
         with ThreadPoolExecutor(max_workers=2) as executor:
-            # 번역과 해석을 동시에 시작
+            # 번역 시작
             translation_future = executor.submit(translate_text, text, source_language, target_language)
             
-            # 번역 결과를 기다림
-            translation = translation_future.result()
-            
-            # 번역 결과를 이용해 해석 시작
-            interpretation_future = executor.submit(interpret_text, translation, target_language)
-            
-            # 해석 결과를 기다림
+            # 영어->한국어: 원문(영어) 텍스트로 뉘앑스 해석
+            # 한국어->영어: 번역 완료를 기다렸다가 번역된 영어로 뉘앑스 해석
+            if source_language == "영어":
+                # 영어 원문으로 바로 뉘앑스 해석 시작
+                interpretation_future = executor.submit(interpret_text, text, source_language, target_language)
+            else:
+                # 번역 결과를 기다림
+                translation = translation_future.result()
+                # 번역된 영어로 뉘앑스 해석 시작
+                interpretation_future = executor.submit(interpret_text, translation, source_language, target_language)
+
+            # 모든 결과 수집
+            translation = translation_future.result() if source_language != "영어" else translation
             interpretation = interpretation_future.result()
 
-            # 데이터베이스에 저장 (동기적으로 수행)
+            # 데이터베이스에 저장
             save_translation(session['user_id'], text, translation, source_language, target_language, interpretation)
 
         return jsonify({
@@ -192,14 +206,32 @@ def get_translations():
     
     try:
         db = get_db()
-        translations = db.execute("SELECT id, source_text, translated_text, source_language, target_language, interpretation, strftime('%Y-%m-%d', created_at) as date FROM translations WHERE user_id = ? ORDER BY created_at DESC", (session['user_id'],)).fetchall()
+        translations = db.execute("""
+            SELECT 
+                id, 
+                source_text, 
+                translated_text, 
+                source_language, 
+                target_language, 
+                interpretation, 
+                strftime('%Y-%m', created_at) as month,
+                strftime('%Y-%m-%d', created_at) as date 
+            FROM translations 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC
+        """, (session['user_id'],)).fetchall()
 
-        translations_by_date = {}
+        translations_by_month = {}
         for t in translations:
+            month = t['month']
+            if month not in translations_by_month:
+                translations_by_month[month] = {}
+            
             date = t['date']
-            if date not in translations_by_date:
-                translations_by_date[date] = []
-            translations_by_date[date].append({
+            if date not in translations_by_month[month]:
+                translations_by_month[month][date] = []
+                
+            translations_by_month[month][date].append({
                 'id': t['id'],
                 'source_text': t['source_text'],
                 'translated_text': t['translated_text'],
@@ -208,7 +240,7 @@ def get_translations():
                 'interpretation': t['interpretation']
             })
 
-        return jsonify({'translations': translations_by_date})
+        return jsonify({'translations': translations_by_month})
     except Exception as e:
         app.logger.error(f"Error fetching translations: {str(e)}")
         app.logger.error(traceback.format_exc())
@@ -279,6 +311,14 @@ def export_db():
                 os.remove(temp_file_path)
             except Exception as e:
                 app.logger.error(f"Error deleting temporary file: {str(e)}")
+
+@app.route('/static/service-worker.js')
+def serve_service_worker():
+    return app.send_static_file('service-worker.js')
+
+@app.route('/static/manifest.json')
+def serve_manifest():
+    return app.send_static_file('manifest.json')
 
 if __name__ == '__main__':
     app.run(debug=True)

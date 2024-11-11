@@ -7,10 +7,11 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 from dotenv import load_dotenv
-from flask import Flask, g, jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import Flask, g, jsonify, redirect, render_template, request, send_file, session, url_for, Response, stream_with_context
 from openai import OpenAI
 from werkzeug.security import check_password_hash, generate_password_hash
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
 
 
 app = Flask(__name__)
@@ -143,29 +144,63 @@ def translate_text(text, source_language, target_language):
     result = translation_response.choices[0].message.content.strip()
     return result, elapsed_time
 
-def interpret_text(text, source_language, target_language):
-    start_time = datetime.now()
-    
+def interpret_text_stream(text, source_language, target_language):
     if source_language == "영어":
         interpretation_prompt = f"다음 영어 원문의 뉘앙스와 의미를 한국어로 자세히 설명해주세요. 왜 해당문장을 다음과 번역했는지도 설명해주세요: '{text}'"
         system_content = "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."
     else:
-        interpretation_prompt = f"다음 영어 번역문의 뉘앙스와 의미를 한국어로 자세히 설명해주세요 왜 해당문장을 다음과 번역했는지도 설명해주세요: '{text}'"
+        interpretation_prompt = f"다음 영어 번역문의 뉘앑스와 의미를 한국어로 자세히 설명해주세요 왜 해당문장을 다음과 번역했는지도 설명해주세요: '{text}'"
         system_content = "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."
 
-    interpretation_response = client.chat.completions.create(
-        model="gpt-4o",
+    stream = client.chat.completions.create(
+        model="gpt-4",
         messages=[
             {"role": "system", "content": system_content},
             {"role": "user", "content": interpretation_prompt}
-        ]
+        ],
+        stream=True  # 스트리밍 활성화
     )
     
-    end_time = datetime.now()
-    elapsed_time = (end_time - start_time).total_seconds()
+    return stream
+
+@app.route('/interpret_stream', methods=['POST'])
+def interpret_stream():
+    if 'user_id' not in session:
+        return jsonify({'error': 'User not authenticated'}), 401
     
-    result = interpretation_response.choices[0].message.content.strip()
-    return result, elapsed_time
+    data = request.json
+    text = data.get('text', '')
+    translation = data.get('translation', '')
+    source_language = data.get('source_language', '')
+    target_language = data.get('target_language', '')
+    
+    def generate():
+        full_text = ""
+        try:
+            stream = interpret_text_stream(text if source_language == "영어" else translation, 
+                                        source_language, target_language)
+            
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    content = chunk.choices[0].delta.content
+                    full_text += content
+                    yield f"data: {json.dumps({'content': content, 'full_text': full_text})}\n\n"
+            
+            # 스트림이 완료되면 저장
+            save_translation(session['user_id'], text, translation, 
+                           source_language, target_language, full_text)
+            yield f"data: {json.dumps({'done': True, 'full_text': full_text})}\n\n"
+            
+        except Exception as e:
+            app.logger.error(f"Streaming error: {str(e)}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    
+    return Response(stream_with_context(generate()), 
+                   mimetype='text/event-stream',
+                   headers={
+                       'Cache-Control': 'no-cache',
+                       'X-Accel-Buffering': 'no'
+                   })
 
 @app.route('/translate', methods=['POST'])
 def translate():

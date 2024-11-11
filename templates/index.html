@@ -272,6 +272,31 @@
         gap: 10px;
         margin-bottom: 15px;
       }
+
+      #interpretationContent {
+        line-height: 1.6;
+        transition: color 0.3s ease;
+        white-space: pre-wrap;
+        font-family: "Segoe UI", sans-serif;
+        position: relative;
+      }
+
+      #interpretationContent.typing::after {
+        content: "|";
+        position: absolute;
+        margin-left: 2px;
+        animation: cursor-blink 1s infinite;
+      }
+
+      @keyframes cursor-blink {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0;
+        }
+      }
     </style>
   </head>
   <body>
@@ -430,33 +455,8 @@
             `번역 시간: ${translationData.timing.translation_time.toFixed(2)}초`
           );
 
-          // 2단계: 해석 및 저장
-          const interpretResponse = await fetch("/interpret_and_save", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              text: sourceText,
-              translation: translationData.translation,
-              source_language: currentSourceLang,
-              target_language: currentTargetLang,
-            }),
-          });
-
-          if (!interpretResponse.ok) {
-            throw new Error("해석 요청 실패");
-          }
-
-          const interpretData = await interpretResponse.json();
-          interpretationContent.innerText = interpretData.interpretation;
-
-          console.log(
-            `해석 시간: ${interpretData.timing.interpretation_time.toFixed(
-              2
-            )}초`
-          );
-          console.log(
-            `저장 시간: ${interpretData.timing.save_time.toFixed(2)}초`
-          );
+          // 2단계: 스트리밍 해석 시작
+          await interpretAndSave(sourceText, translationData.translation);
 
           const endTime = performance.now();
           console.log(
@@ -467,6 +467,69 @@
         } catch (error) {
           console.error("Error:", error);
           showNotification(error.message);
+        }
+      }
+
+      async function interpretAndSave(sourceText, translation) {
+        const interpretationContent = document.getElementById(
+          "interpretationContent"
+        );
+        interpretationContent.innerText = "해석 중...";
+
+        try {
+          const response = await fetch("/interpret_stream", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              text: sourceText,
+              translation: translation,
+              source_language: currentSourceLang,
+              target_language: currentTargetLang,
+            }),
+          });
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let displayedText = "";
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+
+            for (const line of lines) {
+              if (line.startsWith("data: ")) {
+                try {
+                  const data = JSON.parse(line.slice(6));
+
+                  if (data.error) {
+                    throw new Error(data.error);
+                  }
+
+                  if (data.done) {
+                    console.log("스트리밍 완료");
+                    return;
+                  }
+
+                  // 새로운 텍스트를 기존 텍스트에 누적
+                  displayedText = data.full_text;
+                  interpretationContent.innerText = displayedText;
+                } catch (e) {
+                  console.error("JSON 파싱 오류:", e);
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error("해석 스트리밍 중 오류:", error);
+          interpretationContent.innerText = "해석 중 오류가 발생했습니다.";
+          showNotification("해석 중 오류가 발생했습니다.");
         }
       }
 

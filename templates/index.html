@@ -449,6 +449,7 @@
 
           const translationData = await translationResponse.json();
           resultDiv.innerText = translationData.translation;
+          translationResult = translationData.translation;
           copyButton.style.display = "inline";
 
           console.log(

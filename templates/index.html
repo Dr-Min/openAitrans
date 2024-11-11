@@ -392,6 +392,9 @@
       }
 
       async function translate() {
+        const startTime = performance.now();
+        console.log("번역 시작:", new Date().toISOString());
+
         const sourceText = document.getElementById("sourceText").value;
         const resultDiv = document.getElementById("result");
         const interpretationContent = document.getElementById(
@@ -403,6 +406,7 @@
         interpretationContent.innerText = "";
         copyButton.style.display = "none";
 
+        const requestStartTime = performance.now();
         try {
           const response = await fetch("/translate", {
             method: "POST",
@@ -416,6 +420,13 @@
             }),
           });
 
+          const requestEndTime = performance.now();
+          console.log(
+            `API 요청 소요시간: ${(requestEndTime - requestStartTime).toFixed(
+              2
+            )}ms`
+          );
+
           if (!response.ok) {
             if (response.status === 401) {
               window.location.href = "/login";
@@ -427,9 +438,25 @@
 
           const data = await response.json();
           translationResult = data.translation;
+
+          console.log("백엔드 처리 시간 상세:");
+          console.log(
+            `- 번역 시간: ${data.timing.translation_time.toFixed(2)}초`
+          );
+          console.log(
+            `- 해석 시간: ${data.timing.interpretation_time.toFixed(2)}초`
+          );
+          console.log(`- 저장 시간: ${data.timing.save_time.toFixed(2)}초`);
+          console.log(`- 총 처리 시간: ${data.timing.total_time.toFixed(2)}초`);
+
           resultDiv.innerText = translationResult;
           copyButton.style.display = "inline";
           interpretationContent.innerText = data.interpretation;
+
+          const endTime = performance.now();
+          console.log(
+            `전체 프로세스 소요시간: ${(endTime - startTime).toFixed(2)}ms`
+          );
 
           fetchTranslationHistory();
         } catch (error) {

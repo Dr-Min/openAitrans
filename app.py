@@ -127,20 +127,25 @@ def save_translation(user_id, source_text, translated_text, source_language, tar
         db.commit()
 
 def translate_text(text, source_language, target_language):
+    start_time = datetime.now()
     translation_prompt = f"Translate the following {source_language} text to {target_language}, providing a natural and accurate translation that captures the nuance and context: '{text}'"
+    
     translation_response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
-        {"role": "system", "content": "You are a professional translator specializing in nuanced and contextually accurate translations.(번역 결과에 따옴표를 넣지 마세요 예를 들어 'hello'가 아닌 hello로 출력합니다)"},
+            {"role": "system", "content": "You are a professional translator specializing in nuanced and contextually accurate translations.(번역 결과에 따옴표를 넣지 마세요 예를 들어 'hello'가 아닌 hello로 출력합니다)"},
             {"role": "user", "content": translation_prompt}
         ]
     )
-    return translation_response.choices[0].message.content.strip()
-
+    end_time = datetime.now()
+    elapsed_time = (end_time - start_time).total_seconds()
+    
+    result = translation_response.choices[0].message.content.strip()
+    return result, elapsed_time
 
 def interpret_text(text, source_language, target_language):
-    # 영어->한국어 번역일 경우: 영어 원문의 뉘앙스를 한국어로 설명
-    # 한국어->영어 번역일 경우: 영어 번역문의 뉘앙스를 한국어로 설명
+    start_time = datetime.now()
+    
     if source_language == "영어":
         interpretation_prompt = f"다음 영어 원문의 뉘앙스와 의미를 한국어로 자세히 설명해주세요. 왜 해당문장을 다음과 번역했는지도 설명해주세요: '{text}'"
         system_content = "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."
@@ -155,56 +160,64 @@ def interpret_text(text, source_language, target_language):
             {"role": "user", "content": interpretation_prompt}
         ]
     )
-    return interpretation_response.choices[0].message.content.strip()
+    
+    end_time = datetime.now()
+    elapsed_time = (end_time - start_time).total_seconds()
+    
+    result = interpretation_response.choices[0].message.content.strip()
+    return result, elapsed_time
 
 @app.route('/translate', methods=['POST'])
 def translate():
+    total_start_time = datetime.now()
+    
     if 'user_id' not in session:
         return jsonify({'error': 'User not authenticated'}), 401
     
-    try:
-        data = request.json
-        text = data['text']
-        source_language = data['source_language']
-        target_language = data['target_language']
+    data = request.json
+    text = data['text']
+    source_language = data['source_language']
+    target_language = data['target_language']
 
-        app.logger.info(f"Starting translation request: {text[:100]}...")
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            try:
-                # 번역 시작
-                translation_future = executor.submit(translate_text, text, source_language, target_language)
-                
-                if source_language == "영어":
-                    # 영어 원문으로 바로 뉘앑스 해석 시작
-                    interpretation_future = executor.submit(interpret_text, text, source_language, target_language)
-                    # 번역 결과 대기
-                    translation = translation_future.result()
-                else:
-                    # 번역 결과를 기다림
-                    translation = translation_future.result()
-                    # 번역된 영어로 뉘앑스 해석 시작
-                    interpretation_future = executor.submit(interpret_text, translation, source_language, target_language)
-
-                # 해석 결과 대기
-                interpretation = interpretation_future.result()
-
-                # 데이터베이스에 저장
-                save_translation(session['user_id'], text, translation, source_language, target_language, interpretation)
-
-            except Exception as e:
-                app.logger.error(f"Error in executor: {str(e)}")
-                app.logger.error(traceback.format_exc())
-                raise
-
-        return jsonify({
-            'translation': translation,
-            'interpretation': interpretation
-        })
-    except Exception as e:
-        app.logger.error(f"Translation error: {str(e)}")
-        app.logger.error(traceback.format_exc())
-        return jsonify({'error': f'번역 중 오류가 발생했습니다: {str(e)}'}), 500
+    app.logger.info(f"Starting translation request: {text[:100]}...")
+    
+    translation_time = 0
+    interpretation_time = 0
+    
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        try:
+            translation_future = executor.submit(translate_text, text, source_language, target_language)
+            
+            if source_language == "영어":
+                interpretation_future = executor.submit(interpret_text, text, source_language, target_language)
+                translation, translation_time = translation_future.result()
+            else:
+                translation, translation_time = translation_future.result()
+                interpretation_future = executor.submit(interpret_text, translation, source_language, target_language)
+            
+            interpretation, interpretation_time = interpretation_future.result()
+            
+            save_start_time = datetime.now()
+            save_translation(session['user_id'], text, translation, source_language, target_language, interpretation)
+            save_time = (datetime.now() - save_start_time).total_seconds()
+            
+            total_time = (datetime.now() - total_start_time).total_seconds()
+            
+            return jsonify({
+                'translation': translation,
+                'interpretation': interpretation,
+                'timing': {
+                    'translation_time': translation_time,
+                    'interpretation_time': interpretation_time,
+                    'save_time': save_time,
+                    'total_time': total_time
+                }
+            })
+            
+        except Exception as e:
+            app.logger.error(f"Error in executor: {str(e)}")
+            app.logger.error(traceback.format_exc())
+            raise
 
 @app.route('/get_translations', methods=['GET'])
 def get_translations():

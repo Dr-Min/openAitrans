@@ -340,5 +340,57 @@ def serve_service_worker():
 def serve_manifest():
     return app.send_static_file('manifest.json')
 
+@app.route('/translate_only', methods=['POST'])
+def translate_only():
+    if 'user_id' not in session:
+        return jsonify({'error': 'User not authenticated'}), 401
+    
+    data = request.json
+    text = data['text']
+    source_language = data['source_language']
+    target_language = data['target_language']
+    
+    try:
+        translation, translation_time = translate_text(text, source_language, target_language)
+        return jsonify({
+            'translation': translation,
+            'timing': {
+                'translation_time': translation_time
+            }
+        })
+    except Exception as e:
+        app.logger.error(f"Translation error: {str(e)}")
+        return jsonify({'error': '번역 중 오류가 발생했습니다.'}), 500
+
+@app.route('/interpret_and_save', methods=['POST'])
+def interpret_and_save():
+    if 'user_id' not in session:
+        return jsonify({'error': 'User not authenticated'}), 401
+    
+    data = request.json
+    text = data['text']
+    translation = data['translation']
+    source_language = data['source_language']
+    target_language = data['target_language']
+    
+    try:
+        interpretation, interpretation_time = interpret_text(text if source_language == "영어" else translation, 
+                                                          source_language, target_language)
+        
+        save_start_time = datetime.now()
+        save_translation(session['user_id'], text, translation, source_language, target_language, interpretation)
+        save_time = (datetime.now() - save_start_time).total_seconds()
+        
+        return jsonify({
+            'interpretation': interpretation,
+            'timing': {
+                'interpretation_time': interpretation_time,
+                'save_time': save_time
+            }
+        })
+    except Exception as e:
+        app.logger.error(f"Interpretation error: {str(e)}")
+        return jsonify({'error': '해석 중 오류가 발생했습니다.'}), 500
+
 if __name__ == '__main__':
     app.run(debug=True)

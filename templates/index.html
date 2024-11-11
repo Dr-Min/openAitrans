@@ -403,16 +403,14 @@
         const copyButton = document.getElementById("copyButton");
 
         resultDiv.innerText = "번역 중...";
-        interpretationContent.innerText = "";
+        interpretationContent.innerText = "해석 준비 중...";
         copyButton.style.display = "none";
 
-        const requestStartTime = performance.now();
         try {
-          const response = await fetch("/translate", {
+          // 1단계: 번역
+          const translationResponse = await fetch("/translate_only", {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               text: sourceText,
               source_language: currentSourceLang,
@@ -420,38 +418,45 @@
             }),
           });
 
-          const requestEndTime = performance.now();
-          console.log(
-            `API 요청 소요시간: ${(requestEndTime - requestStartTime).toFixed(
-              2
-            )}ms`
-          );
-
-          if (!response.ok) {
-            if (response.status === 401) {
-              window.location.href = "/login";
-              return;
-            }
-            const errorData = await response.json();
-            throw new Error(errorData.error || "서버 오류가 발생했습니다.");
+          if (!translationResponse.ok) {
+            throw new Error("번역 요청 실패");
           }
 
-          const data = await response.json();
-          translationResult = data.translation;
-
-          console.log("백엔드 처리 시간 상세:");
-          console.log(
-            `- 번역 시간: ${data.timing.translation_time.toFixed(2)}초`
-          );
-          console.log(
-            `- 해석 시간: ${data.timing.interpretation_time.toFixed(2)}초`
-          );
-          console.log(`- 저장 시간: ${data.timing.save_time.toFixed(2)}초`);
-          console.log(`- 총 처리 시간: ${data.timing.total_time.toFixed(2)}초`);
-
-          resultDiv.innerText = translationResult;
+          const translationData = await translationResponse.json();
+          resultDiv.innerText = translationData.translation;
           copyButton.style.display = "inline";
-          interpretationContent.innerText = data.interpretation;
+
+          console.log(
+            `번역 시간: ${translationData.timing.translation_time.toFixed(2)}초`
+          );
+
+          // 2단계: 해석 및 저장
+          const interpretResponse = await fetch("/interpret_and_save", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text: sourceText,
+              translation: translationData.translation,
+              source_language: currentSourceLang,
+              target_language: currentTargetLang,
+            }),
+          });
+
+          if (!interpretResponse.ok) {
+            throw new Error("해석 요청 실패");
+          }
+
+          const interpretData = await interpretResponse.json();
+          interpretationContent.innerText = interpretData.interpretation;
+
+          console.log(
+            `해석 시간: ${interpretData.timing.interpretation_time.toFixed(
+              2
+            )}초`
+          );
+          console.log(
+            `저장 시간: ${interpretData.timing.save_time.toFixed(2)}초`
+          );
 
           const endTime = performance.now();
           console.log(
@@ -460,7 +465,6 @@
 
           fetchTranslationHistory();
         } catch (error) {
-          resultDiv.innerText = `오류: ${error.message}`;
           console.error("Error:", error);
           showNotification(error.message);
         }

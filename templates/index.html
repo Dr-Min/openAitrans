@@ -348,6 +348,7 @@
       let currentSourceLang = "한국어";
       let currentTargetLang = "영어";
       let currentController = null;
+      let currentReader = null;
 
       // InterpretationQueue 클래스 위에 추가
       class InterpretationQueue {
@@ -570,11 +571,19 @@
           return;
         }
 
+        // 번역 UI 초기화
         resultDiv.innerText = "번역 중...";
         interpretationContent.innerText = "";
         copyButton.style.display = "none";
 
+        // 이전 스트리밍이 있다면 중단
+        if (currentReader) {
+          currentReader.cancel();
+          currentReader = null;
+        }
+
         try {
+          // 번역 요청 부분은 그대로 유지
           const response = await fetch("/translate_only", {
             method: "POST",
             headers: {
@@ -594,66 +603,52 @@
           translationResult = translationData.translation;
           copyButton.style.display = "inline";
 
-          // 해석 스트리밍 시작
-          startNewInterpretation(sourceText, translationData.translation);
+          // 새로운 해석 스트리밍 시작
+          interpretationContent.innerText = "해석 중...";
+          const streamResponse = await fetch("/interpret_stream", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              text: sourceText,
+              translation: translationData.translation,
+              source_language: currentSourceLang,
+              target_language: currentTargetLang,
+            }),
+          });
+
+          const reader = streamResponse.body.getReader();
+          currentReader = reader;
+          const decoder = new TextDecoder();
+          let fullText = "";
+
+          while (true) {
+            const {value, done} = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, {stream: true});
+            const lines = chunk.split('\n\n');
+            
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const data = JSON.parse(line.slice(6));
+                if (data.error) {
+                  showNotification(data.error);
+                  break;
+                } else if (data.done) {
+                  break;
+                } else {
+                  fullText = data.full_text;
+                  interpretationContent.innerText = fullText;
+                }
+              }
+            }
+          }
         } catch (error) {
           console.error("Error:", error);
           showNotification(error.message);
         }
-      }
-
-      function startNewInterpretation(sourceText, translation) {
-        const interpretationContent = document.getElementById("interpretationContent");
-        interpretationContent.innerText = "해석 중...";
-
-        fetch("/interpret_stream", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            text: sourceText,
-            translation: translation,
-            source_language: currentSourceLang,
-            target_language: currentTargetLang,
-          }),
-        }).then(response => {
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-
-          return new ReadableStream({
-            start(controller) {
-              function push() {
-                reader.read().then(({done, value}) => {
-                  if (done) {
-                    controller.close();
-                    return;
-                  }
-
-                  const chunk = decoder.decode(value, {stream: true});
-                  const lines = chunk.split('\n\n');
-                  
-                  lines.forEach(line => {
-                    if (line.startsWith('data: ')) {
-                      const data = JSON.parse(line.slice(6));
-                      if (data.error) {
-                        showNotification(data.error);
-                      } else if (!data.done) {
-                        interpretationContent.innerText = data.full_text;
-                      }
-                    }
-                  });
-
-                  push();
-                });
-              }
-              push();
-            }
-          });
-        }).catch(error => {
-          console.error("스트리밍 에러:", error);
-          showNotification(error.message);
-        });
       }
 
       function copyTranslation() {
@@ -867,7 +862,7 @@
             document.body.appendChild(a);
             a.click();
             window.URL.revokeObjectURL(url);
-            showNotification("��이터베이스가 성공적으로 추출되었습니다.");
+            showNotification("이터베이스가 성공적으로 추출되었습니다.");
           } else {
             throw new Error("데이터베이스 추출 실패");
           }

@@ -571,23 +571,63 @@
         }
 
         resultDiv.innerText = "번역 중...";
-        interpretationContent.innerText = "해석 준비 중...";
+        interpretationContent.innerText = "";
         copyButton.style.display = "none";
 
         try {
-          const translation = await translationQueue.translate(sourceText);
-          if (translation) {
-            resultDiv.innerText = translation;
-            translationResult = translation;
-            copyButton.style.display = "inline";
-            
-            // 해석 스트리밍 시작
-            interpretationQueue.add(sourceText, translation);
-          }
+          const response = await fetch("/translate_only", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              text: sourceText,
+              source_language: currentSourceLang,
+              target_language: currentTargetLang,
+            }),
+          });
+
+          const translationData = await response.json();
+          if (translationData.error) throw new Error(translationData.error);
+
+          resultDiv.innerText = translationData.translation;
+          translationResult = translationData.translation;
+          copyButton.style.display = "inline";
+
+          // 해석 스트리밍 시작
+          startNewInterpretation(sourceText, translationData.translation);
         } catch (error) {
           console.error("Error:", error);
           showNotification(error.message);
         }
+      }
+
+      function startNewInterpretation(sourceText, translation) {
+        const interpretationContent = document.getElementById("interpretationContent");
+        interpretationContent.innerText = "해석 중...";
+
+        const eventSource = new EventSource(`/interpret_stream?${new URLSearchParams({
+          text: sourceText,
+          translation: translation,
+          source_language: currentSourceLang,
+          target_language: currentTargetLang,
+        })}`);
+
+        eventSource.onmessage = function(event) {
+          const data = JSON.parse(event.data);
+          if (data.error) {
+            showNotification(data.error);
+            eventSource.close();
+          } else if (data.done) {
+            eventSource.close();
+          } else {
+            interpretationContent.innerText = data.full_text;
+          }
+        };
+
+        eventSource.onerror = function() {
+          eventSource.close();
+        };
       }
 
       function copyTranslation() {

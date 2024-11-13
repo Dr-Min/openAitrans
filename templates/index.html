@@ -350,6 +350,59 @@
       let currentController = null;
 
       // InterpretationQueue 클래스 위에 추가
+      class InterpretationQueue {
+        constructor() {
+          this.currentController = null;
+          this.currentRequestId = null;
+          this.activeStreams = new Map();
+          this.fullText = "";
+        }
+
+        async translate(sourceText) {
+          try {
+            // 이전 번역 요청 중단
+            if (this.currentController) {
+              this.currentController.abort();
+              this.currentController = null;
+            }
+
+            const requestId = Date.now().toString();
+            this.currentRequestId = requestId;
+            this.currentController = new AbortController();
+
+            const response = await fetch("/translate_only", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              signal: this.currentController.signal,
+              body: JSON.stringify({
+                text: sourceText,
+                source_language: currentSourceLang,
+                target_language: currentTargetLang,
+              }),
+            });
+
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            
+            const translationData = await response.json();
+            if (translationData.error) throw new Error(translationData.error);
+            
+            // 현재 요청이 최신 요청인 경우에만 결과 반영
+            if (requestId === this.currentRequestId) {
+              return translationData.translation;
+            }
+          } catch (error) {
+            if (error.name === 'AbortError') {
+              console.log('이전 번역이 중단되었습니다.');
+            } else {
+              throw error;
+            }
+          }
+        }
+      }
+
+      // TranslationQueue 클래스 위에 추가
       class TranslationQueue {
         constructor() {
           this.currentController = null;
@@ -400,7 +453,8 @@
         }
       }
 
-      // 전역 인스턴스 생성 (InterpretationQueue 선언 위에 추가)
+      // 전역 인스턴스 생성
+      const interpretationQueue = new InterpretationQueue();
       const translationQueue = new TranslationQueue();
 
       document.addEventListener("DOMContentLoaded", function () {

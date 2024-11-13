@@ -177,8 +177,10 @@ def interpret_stream():
     def generate():
         full_text = ""
         try:
-            stream = interpret_text_stream(text if source_language == "영어" else translation, 
-                                        source_language, target_language)
+            stream = interpret_text_stream(
+                text if source_language == "영어" else translation,
+                source_language, target_language
+            )
             
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
@@ -186,21 +188,30 @@ def interpret_stream():
                     full_text += content
                     yield f"data: {json.dumps({'content': content, 'full_text': full_text})}\n\n"
             
-            # 스트림이 완료되면 저장
-            save_translation(session['user_id'], text, translation, 
-                           source_language, target_language, full_text)
+            # 스트리밍이 완료된 후 비동기로 저장
+            executor.submit(
+                save_translation,
+                session['user_id'],
+                text,
+                translation,
+                source_language,
+                target_language,
+                full_text
+            )
             yield f"data: {json.dumps({'done': True, 'full_text': full_text})}\n\n"
             
         except Exception as e:
             app.logger.error(f"Streaming error: {str(e)}")
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
     
-    return Response(stream_with_context(generate()), 
-                   mimetype='text/event-stream',
-                   headers={
-                       'Cache-Control': 'no-cache',
-                       'X-Accel-Buffering': 'no'
-                   })
+    return Response(
+        stream_with_context(generate()), 
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no'
+        }
+    )
 
 @app.route('/translate', methods=['POST'])
 def translate():
@@ -381,21 +392,16 @@ def translate_only():
         return jsonify({'error': 'User not authenticated'}), 401
     
     data = request.json
-    text = data['text']
-    source_language = data['source_language']
-    target_language = data['target_language']
+    text = data.get('text', '')
+    source_language = data.get('source_language', '')
+    target_language = data.get('target_language', '')
     
     try:
-        translation, translation_time = translate_text(text, source_language, target_language)
-        return jsonify({
-            'translation': translation,
-            'timing': {
-                'translation_time': translation_time
-            }
-        })
+        translation, _ = translate_text(text, source_language, target_language)
+        return jsonify({'translation': translation})
     except Exception as e:
         app.logger.error(f"Translation error: {str(e)}")
-        return jsonify({'error': '번역 중 오류가 발생했습니다.'}), 500
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/interpret_and_save', methods=['POST'])
 def interpret_and_save():

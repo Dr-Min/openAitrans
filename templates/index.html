@@ -348,6 +348,97 @@
       let currentSourceLang = "한국어";
       let currentTargetLang = "영어";
 
+      const interpretationQueue = {
+        activeStreams: new Map(),
+        currentRequestId: null,
+
+        async add(sourceText, translation) {
+          const requestId = Date.now().toString();
+
+          this.currentRequestId = requestId;
+
+          this.startNewStream(requestId, sourceText, translation);
+        },
+
+        async startNewStream(requestId, sourceText, translation) {
+          const interpretationContent = document.getElementById(
+            "interpretationContent"
+          );
+
+          if (requestId === this.currentRequestId) {
+            interpretationContent.innerText = "해석 중...";
+          }
+
+          try {
+            const response = await fetch("/interpret_stream", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                text: sourceText,
+                translation: translation,
+                source_language: currentSourceLang,
+                target_language: currentTargetLang,
+              }),
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            this.activeStreams.set(requestId, true);
+
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+
+              if (!this.activeStreams.get(requestId)) {
+                reader.cancel();
+                break;
+              }
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n\n");
+              buffer = lines.pop() || "";
+
+              for (const line of lines) {
+                if (line.trim().startsWith("data: ")) {
+                  const jsonStr = line.replace("data: ", "").trim();
+                  try {
+                    const data = JSON.parse(jsonStr);
+                    if (data.error) throw new Error(data.error);
+                    if (data.done) {
+                      this.activeStreams.delete(requestId);
+                      return;
+                    }
+
+                    if (requestId === this.currentRequestId) {
+                      interpretationContent.innerText = data.full_text;
+                    }
+                  } catch (e) {
+                    console.error(
+                      "JSON 파싱 에러:",
+                      e,
+                      "원본 데이터:",
+                      jsonStr
+                    );
+                  }
+                }
+              }
+            }
+          } catch (error) {
+            console.error("스트리밍 에러:", error);
+            this.activeStreams.delete(requestId);
+            throw error;
+          }
+        },
+      };
+
       document.addEventListener("DOMContentLoaded", function () {
         const translateBtn = document.getElementById("translateBtn");
         const copyButton = document.getElementById("copyButton");
@@ -357,14 +448,13 @@
         const exportDBBtn = document.getElementById("exportDBBtn");
         const logoutBtn = document.getElementById("logoutBtn");
 
-        translateBtn.addEventListener("click", translate);
+        translateBtn.addEventListener("click", handleTranslate);
         copyButton.addEventListener("click", copyTranslation);
         clearButton.addEventListener("click", clearText);
         languageToggle.addEventListener("click", toggleLanguages);
         exportDBBtn.addEventListener("click", exportDatabase);
         logoutBtn.addEventListener("click", logout);
 
-        // 핸드폰 흔들기 감지 기능
         if (typeof Shake === "function") {
           var shakeEvent = new Shake({ threshold: 15 });
           shakeEvent.start();
@@ -372,15 +462,12 @@
           window.addEventListener("shake", clearText, false);
         }
 
-        // 페이지 로드 시 번역 기록 가져오기
         fetchTranslationHistory();
 
-        // 엔터키 이벤트 리스너 추가
         sourceText.addEventListener("keydown", function (event) {
-          // Shift + Enter는 줄바꿈 허용
           if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault(); // 기본 줄바꿈 동작 방지
-            translate(); // 번역 실행
+            event.preventDefault();
+            handleTranslate();
           }
         });
       });
@@ -416,121 +503,35 @@
         ).placeholder = `${currentSourceLang}로 번역할 텍스트를 입력하세요`;
       }
 
-      async function translate() {
+      async function handleTranslate() {
         const startTime = performance.now();
-        console.log("번역 시작:", new Date().toISOString());
-
         const sourceText = document.getElementById("sourceText").value;
         const resultDiv = document.getElementById("result");
-        const interpretationContent = document.getElementById(
-          "interpretationContent"
-        );
-        const copyButton = document.getElementById("copyButton");
-
-        resultDiv.innerText = "번역 중...";
-        interpretationContent.innerText = "해석 준비 중...";
-        copyButton.style.display = "none";
 
         try {
-          // 1단계: 번역
           const translationResponse = await fetch("/translate_only", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              text: sourceText,
-              source_language: currentSourceLang,
-              target_language: currentTargetLang,
-            }),
-          });
-
-          if (!translationResponse.ok) {
-            throw new Error("번역 요청 실패");
-          }
-
-          const translationData = await translationResponse.json();
-          resultDiv.innerText = translationData.translation;
-          translationResult = translationData.translation;
-          copyButton.style.display = "inline";
-
-          console.log(
-            `번역 시간: ${translationData.timing.translation_time.toFixed(2)}초`
-          );
-
-          // 2단계: 스트리밍 해석 시작
-          await interpretAndSave(sourceText, translationData.translation);
-
-          const endTime = performance.now();
-          console.log(
-            `전체 프로세스 소요시간: ${(endTime - startTime).toFixed(2)}ms`
-          );
-
-          fetchTranslationHistory();
-        } catch (error) {
-          console.error("Error:", error);
-          showNotification(error.message);
-        }
-      }
-
-      async function interpretAndSave(sourceText, translation) {
-        const interpretationContent = document.getElementById(
-          "interpretationContent"
-        );
-        interpretationContent.innerText = "해석 중...";
-
-        try {
-          const response = await fetch("/interpret_stream", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
               text: sourceText,
-              translation: translation,
               source_language: currentSourceLang,
               target_language: currentTargetLang,
             }),
           });
 
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = "";
-          let displayedText = "";
+          const translationData = await translationResponse.json();
+          if (translationData.error) throw new Error(translationData.error);
 
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
+          resultDiv.innerText = translationData.translation;
+          translationResult = translationData.translation;
+          document.getElementById("copyButton").style.display = "inline";
 
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-
-            for (const line of lines) {
-              if (line.startsWith("data: ")) {
-                try {
-                  const data = JSON.parse(line.slice(6));
-
-                  if (data.error) {
-                    throw new Error(data.error);
-                  }
-
-                  if (data.done) {
-                    console.log("스트리밍 완료");
-                    return;
-                  }
-
-                  // 새로운 텍스트를 기존 텍스트에 누적
-                  displayedText = data.full_text;
-                  interpretationContent.innerText = displayedText;
-                } catch (e) {
-                  console.error("JSON 파싱 오류:", e);
-                }
-              }
-            }
-          }
+          interpretationQueue.add(sourceText, translationData.translation);
         } catch (error) {
-          console.error("해석 스트리밍 중 오류:", error);
-          interpretationContent.innerText = "해석 중 오류가 발생했습니다.";
-          showNotification("해석 중 오류가 발생했습니다.");
+          console.error("Error:", error);
+          showNotification(error.message);
         }
       }
 
@@ -552,7 +553,7 @@
         notification.classList.add("show");
         setTimeout(() => {
           notification.classList.remove("show");
-        }, 3000); // 3초 후 알림 숨김
+        }, 3000);
       }
 
       async function fetchTranslationHistory() {
@@ -576,7 +577,6 @@
         const monthSelect = document.getElementById("monthSelect");
         monthSelect.innerHTML = '<option value="">월 선택</option>';
 
-        // 월 목록 생성
         const months = Object.keys(translations).sort().reverse();
         months.forEach((month) => {
           const option = document.createElement("option");
@@ -586,7 +586,6 @@
           monthSelect.appendChild(option);
         });
 
-        // 이벤트 리스너 추가
         monthSelect.addEventListener("change", () => {
           const selectedMonth = monthSelect.value;
           if (selectedMonth) {
@@ -599,7 +598,6 @@
           }
         });
 
-        // 가장 최근 월 자동 선택
         if (months.length > 0) {
           monthSelect.value = months[0];
           displayMonthTranslations(months[0], translations[months[0]]);
@@ -610,14 +608,11 @@
         const historyContent = document.getElementById("historyContent");
         historyContent.innerHTML = "";
 
-        // 날짜 버튼들을 담을 컨테이너
         const dateButtonsContainer = document.createElement("div");
         dateButtonsContainer.className = "date-buttons-container";
 
-        // 날짜 정렬
         const dates = Object.keys(monthData).sort().reverse();
 
-        // 날짜 버튼 생성
         dates.forEach((date) => {
           const button = document.createElement("button");
           button.className = "date-button";
@@ -634,7 +629,6 @@
 
         historyContent.appendChild(dateButtonsContainer);
 
-        // 첫 번째 날짜의 번역 기록 표시
         if (dates.length > 0) {
           dateButtonsContainer.firstChild.classList.add("active");
           displayDateTranslations(dates[0], monthData[dates[0]]);
@@ -658,7 +652,6 @@
                 <button class="delete-btn" data-id="${translation.id}">삭제</button>
             `;
 
-          // 클릭 이벤트 리스너 추가
           recordDiv.addEventListener("click", function (e) {
             if (!e.target.classList.contains("delete-btn")) {
               const interpretation = this.querySelector(".interpretation");
@@ -667,7 +660,6 @@
             }
           });
 
-          // 삭제 버튼 이벤트 리스너
           const deleteBtn = recordDiv.querySelector(".delete-btn");
           deleteBtn.addEventListener("click", (e) => {
             e.stopPropagation();
@@ -677,7 +669,6 @@
           translationsContainer.appendChild(recordDiv);
         });
 
-        // 기존 번역 기록 컨테이너 교체
         const existingContainer = historyContent.querySelector(
           ".translations-container"
         );
@@ -718,19 +709,16 @@
         if (translationRecord) {
           translationRecord.remove();
 
-          // 해당 날짜의 모든 번역 기록이 삭제되었는지 확인
           const dateRecords = historyContent.querySelectorAll(
             `.translation-record[data-date="${date}"]`
           );
           if (dateRecords.length === 0) {
-            // 날짜 표시도 제거
             const dateDiv = historyContent.querySelector(
               `.translation-date[data-date="${date}"]`
             );
             if (dateDiv) {
               dateDiv.remove();
             }
-            // 날짜 버튼도 제거
             const dateButton = document.querySelector(
               `.date-button[data-date="${date}"]`
             );

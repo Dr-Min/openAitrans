@@ -25,7 +25,7 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 # 스레드 풀 생성
-executor = ThreadPoolExecutor(max_workers=5)
+executor = ThreadPoolExecutor(max_workers=10)
 
 # 데이터베이스 연결
 def get_db():
@@ -125,11 +125,36 @@ def logout():
     return redirect(url_for('login'))
 
 def save_translation(user_id, source_text, translated_text, source_language, target_language, interpretation):
-    with app.app_context():
-        db = get_db()
-        db.execute("INSERT INTO translations (user_id, source_text, translated_text, source_language, target_language, interpretation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                  (user_id, source_text, translated_text, source_language, target_language, interpretation, datetime.now()))
-        db.commit()
+    try:
+        with app.app_context():
+            db = get_db()
+            # 기존 번역 확인
+            existing = db.execute("""
+                SELECT id FROM translations 
+                WHERE user_id = ? AND source_text = ? AND translated_text = ?
+                ORDER BY created_at DESC LIMIT 1
+            """, (user_id, source_text, translated_text)).fetchone()
+            
+            if existing:
+                # 기존 번역이 있으면 업데이트
+                db.execute("""
+                    UPDATE translations 
+                    SET interpretation = ?, created_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (interpretation, existing[0]))
+            else:
+                # 새로운 번역 추가
+                db.execute("""
+                    INSERT INTO translations 
+                    (user_id, source_text, translated_text, source_language, target_language, interpretation, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (user_id, source_text, translated_text, source_language, target_language, interpretation))
+            
+            db.commit()
+            return True
+    except Exception as e:
+        app.logger.error(f"Database error in save_translation: {str(e)}")
+        return False
 
 def translate_text(text, source_language, target_language):
     start_time = datetime.now()
@@ -153,7 +178,7 @@ def interpret_text_stream(text, source_language, target_language):
         interpretation_prompt = f"다음 영어 원문의 뉘앙스와 의미를 한국어로 자세히 설명해주세요. 왜 해당문장을 다음과 번역했는지도 설명해주세요: '{text}'"
         system_content = "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."
     else:
-        interpretation_prompt = f"다음 영어 번역문의 뉘앑스와 의미를 한국어로 자세히 설명해주세요 왜 해당문장을 다음과 번역했는지도 설명해주세요: '{text}'"
+        interpretation_prompt = f"다음 영어 번역문의 뉘앙스와 의미를 한국어로 자세히 설명해주세요 왜 해당문장을 다음과 번역했는지도 설명해주세요: '{text}'"
         system_content = "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."
 
     stream = client.chat.completions.create(
@@ -183,7 +208,8 @@ def interpret_stream():
         try:
             stream = interpret_text_stream(
                 text if source_language == "영어" else translation,
-                source_language, target_language
+                source_language,
+                target_language
             )
             
             for chunk in stream:
@@ -202,14 +228,14 @@ def interpret_stream():
                 target_language,
                 full_text
             )
-            yield f"data: {json.dumps({'done': True, 'full_text': full_text})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
             
         except Exception as e:
             app.logger.error(f"Streaming error: {str(e)}")
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
     
     return Response(
-        stream_with_context(generate()), 
+        stream_with_context(generate()),
         mimetype='text/event-stream',
         headers={
             'Cache-Control': 'no-cache',

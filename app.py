@@ -3,11 +3,11 @@ import secrets
 import sqlite3
 import tempfile
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
 from dotenv import load_dotenv
-from flask import Flask, g, jsonify, redirect, render_template, request, send_file, session, url_for, Response, stream_with_context
+from flask import Flask, g, jsonify, redirect, render_template, request, send_file, session, url_for, Response, stream_with_context, flash
 from openai import OpenAI
 from werkzeug.security import check_password_hash, generate_password_hash
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,6 +16,7 @@ import json
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
+app.permanent_session_lifetime = timedelta(days=30)
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -105,14 +106,17 @@ def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
+        remember = 'remember' in request.form
         
         db = get_db()
-        user = db.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+        user = db.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
         
         if user and check_password_hash(user['password'], password):
+            session.permanent = remember  # remember가 True면 permanent 세션으로 설정
             session['user_id'] = user['id']
             return redirect(url_for('index'))
-        return "Invalid username or password"
+            
+        flash('잘못된 사용자명 또는 비밀번호입니다.')
     return render_template('login.html')
 
 @app.route('/logout')

@@ -16,7 +16,7 @@ import json
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
-app.permanent_session_lifetime = timedelta(days=30)
+app.permanent_session_lifetime = timedelta(days=90)
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -112,8 +112,11 @@ def login():
         user = db.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
         
         if user and check_password_hash(user['password'], password):
-            session.permanent = remember  # remember가 True면 permanent 세션으로 설정
+            # 영구 세션으로 설정
+            session.permanent = True
             session['user_id'] = user['id']
+            # 쿠키 만료 시간을 90일로 설정
+            session.modified = True
             return redirect(url_for('index'))
             
         flash('잘못된 사용자명 또는 비밀번호입니다.')

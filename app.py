@@ -185,7 +185,7 @@ def interpret_text_stream(text, source_language, target_language):
         system_content = "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."
 
     stream = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": system_content},
             {"role": "user", "content": interpretation_prompt}

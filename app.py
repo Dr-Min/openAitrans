@@ -15,7 +15,7 @@ import json
 
 
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(16)
+app.secret_key = os.getenv('SECRET_KEY')
 app.permanent_session_lifetime = timedelta(days=90)
 
 # .env 파일에서 환경 변수 로드

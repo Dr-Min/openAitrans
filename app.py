@@ -81,7 +81,9 @@ def translate_text(text, source_language, target_language):
     end_time = datetime.now()
     elapsed_time = (end_time - start_time).total_seconds()
     
+    # 결과를 JSON-safe하게 처리
     result = translation_response.choices[0].message.content.strip()
+    result = result.encode('utf-8').decode('utf-8')
     return result, elapsed_time
 
 def interpret_text_stream(text, source_language, target_language):
@@ -123,6 +125,8 @@ def interpret_stream():
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
                     content = chunk.choices[0].delta.content
+                    # 스트림 결과도 JSON-safe하게 처리
+                    content = content.encode('utf-8').decode('utf-8')
                     full_text += content
                     yield f"data: {json.dumps({'content': content, 'full_text': full_text})}\n\n"
             

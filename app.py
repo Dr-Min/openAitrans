@@ -170,50 +170,8 @@ def translate():
 
 @app.route('/get_translations', methods=['GET'])
 def get_translations():
-    if 'user_id' not in session:
-        return jsonify({'error': 'User not authenticated'}), 401
-    
-    try:
-        db = get_db()
-        translations = db.execute("""
-            SELECT 
-                id, 
-                source_text, 
-                translated_text, 
-                source_language, 
-                target_language, 
-                interpretation, 
-                strftime('%Y-%m', created_at) as month,
-                strftime('%Y-%m-%d', created_at) as date 
-            FROM translations 
-            WHERE user_id = ? 
-            ORDER BY created_at DESC
-        """, (session['user_id'],)).fetchall()
-
-        translations_by_month = {}
-        for t in translations:
-            month = t['month']
-            if month not in translations_by_month:
-                translations_by_month[month] = {}
-            
-            date = t['date']
-            if date not in translations_by_month[month]:
-                translations_by_month[month][date] = []
-                
-            translations_by_month[month][date].append({
-                'id': t['id'],
-                'source_text': t['source_text'],
-                'translated_text': t['translated_text'],
-                'source_language': t['source_language'],
-                'target_language': t['target_language'],
-                'interpretation': t['interpretation']
-            })
-
-        return jsonify({'translations': translations_by_month})
-    except Exception as e:
-        app.logger.error(f"Error fetching translations: {str(e)}")
-        app.logger.error(traceback.format_exc())
-        return jsonify({'error': '번역 기록을 가져오는 중 오류가 발생했습니다.'}), 500
+    # 임시로 빈 결과 반환
+    return jsonify({'translations': {}})
 
 @app.route('/delete_translation/<int:id>', methods=['DELETE'])
 def delete_translation(id):
@@ -291,9 +249,6 @@ def serve_manifest():
 
 @app.route('/translate_only', methods=['POST'])
 def translate_only():
-    if 'user_id' not in session:
-        return jsonify({'error': 'User not authenticated'}), 401
-    
     data = request.json
     text = data.get('text', '')
     source_language = data.get('source_language', '')
@@ -308,9 +263,6 @@ def translate_only():
 
 @app.route('/interpret_and_save', methods=['POST'])
 def interpret_and_save():
-    if 'user_id' not in session:
-        return jsonify({'error': 'User not authenticated'}), 401
-    
     data = request.json
     text = data['text']
     translation = data['translation']
@@ -321,15 +273,10 @@ def interpret_and_save():
         interpretation, interpretation_time = interpret_text(text if source_language == "영어" else translation, 
                                                           source_language, target_language)
         
-        save_start_time = datetime.now()
-        save_translation(session['user_id'], text, translation, source_language, target_language, interpretation)
-        save_time = (datetime.now() - save_start_time).total_seconds()
-        
         return jsonify({
             'interpretation': interpretation,
             'timing': {
-                'interpretation_time': interpretation_time,
-                'save_time': save_time
+                'interpretation_time': interpretation_time
             }
         })
     except Exception as e:

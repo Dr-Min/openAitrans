@@ -7,3 +7,4 @@
 /envv
 node_modules/
 venv/
+.vercel

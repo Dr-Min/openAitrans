@@ -29,55 +29,19 @@ executor = ThreadPoolExecutor(max_workers=10)
 
 # 데이터베이스 연결
 def get_db():
-    if 'db' not in g:
-        g.db = sqlite3.connect('translations.db')
-        g.db.row_factory = sqlite3.Row
-    return g.db
+    return None
 
 @app.teardown_appcontext
 def close_db(error):
-    if hasattr(g, 'db'):
-        g.db.close()
+    pass
 
 # 데이터베이스 초기화
 def init_db():
-    db = get_db()
-    cursor = db.cursor()
-    try:
-        # users 테이블 생성
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password TEXT NOT NULL
-            )
-        ''')
-
-        # translations 테이블 생성
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS translations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                source_text TEXT,
-                translated_text TEXT,
-                source_language TEXT,
-                target_language TEXT,
-                interpretation TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            )
-        ''')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_id ON translations (user_id)')
-        
-        db.commit()
-        app.logger.info("Database initialized successfully.")
-    except sqlite3.Error as e:
-        app.logger.error(f"Database initialization error: {e}")
-        db.rollback()
+    pass
 
 # 앱 시작 시 데이터베이스 초기화
-with app.app_context():
-    init_db()
+# with app.app_context():
+#     init_db()
 
 @app.route('/')
 def index():
@@ -128,36 +92,8 @@ def logout():
     return redirect(url_for('login'))
 
 def save_translation(user_id, source_text, translated_text, source_language, target_language, interpretation):
-    try:
-        with app.app_context():
-            db = get_db()
-            # 기존 번역 확인
-            existing = db.execute("""
-                SELECT id FROM translations 
-                WHERE user_id = ? AND source_text = ? AND translated_text = ?
-                ORDER BY created_at DESC LIMIT 1
-            """, (user_id, source_text, translated_text)).fetchone()
-            
-            if existing:
-                # 기존 번역이 있으면 업데이트
-                db.execute("""
-                    UPDATE translations 
-                    SET interpretation = ?, created_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                """, (interpretation, existing[0]))
-            else:
-                # 새로운 번역 추가
-                db.execute("""
-                    INSERT INTO translations 
-                    (user_id, source_text, translated_text, source_language, target_language, interpretation, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                """, (user_id, source_text, translated_text, source_language, target_language, interpretation))
-            
-            db.commit()
-            return True
-    except Exception as e:
-        app.logger.error(f"Database error in save_translation: {str(e)}")
-        return False
+    # 서버리스 환경에서 임시로 저장 기능 비활성화
+    return True
 
 def translate_text(text, source_language, target_language):
     start_time = datetime.now()

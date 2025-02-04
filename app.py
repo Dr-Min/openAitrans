@@ -45,51 +45,23 @@ def init_db():
 
 @app.route('/')
 def index():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
+    # 임시로 세션 검사 제거
     return render_template('index.html')
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        hashed_password = generate_password_hash(password)
-        
-        db = get_db()
-        try:
-            db.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, hashed_password))
-            db.commit()
-            return redirect(url_for('login'))
-        except sqlite3.IntegrityError:
-            return "Username already exists"
-    return render_template('register.html')
+    # 임시로 회원가입 기능 비활성화
+    return redirect(url_for('index'))
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        remember = 'remember' in request.form
-        
-        db = get_db()
-        user = db.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
-        
-        if user and check_password_hash(user['password'], password):
-            # 영구 세션으로 설정
-            session.permanent = True
-            session['user_id'] = user['id']
-            # 쿠키 만료 시간을 90일로 설정
-            session.modified = True
-            return redirect(url_for('index'))
-            
-        flash('잘못된 사용자명 또는 비밀번호입니다.')
-    return render_template('login.html')
+    # 임시로 로그인 기능 비활성화
+    return redirect(url_for('index'))
 
 @app.route('/logout')
 def logout():
-    session.pop('user_id', None)
-    return redirect(url_for('login'))
+    # 임시로 로그아웃 기능 비활성화
+    return redirect(url_for('index'))
 
 def save_translation(user_id, source_text, translated_text, source_language, target_language, interpretation):
     # 서버리스 환경에서 임시로 저장 기능 비활성화
@@ -133,9 +105,6 @@ def interpret_text_stream(text, source_language, target_language):
 
 @app.route('/interpret_stream', methods=['POST'])
 def interpret_stream():
-    if 'user_id' not in session:
-        return jsonify({'error': 'User not authenticated'}), 401
-    
     data = request.json
     text = data.get('text', '')
     translation = data.get('translation', '')
@@ -157,16 +126,6 @@ def interpret_stream():
                     full_text += content
                     yield f"data: {json.dumps({'content': content, 'full_text': full_text})}\n\n"
             
-            # 스트리밍이 완료된 후 비동기로 저장
-            executor.submit(
-                save_translation,
-                session['user_id'],
-                text,
-                translation,
-                source_language,
-                target_language,
-                full_text
-            )
             yield f"data: {json.dumps({'done': True})}\n\n"
             
         except Exception as e:
@@ -186,9 +145,6 @@ def interpret_stream():
 def translate():
     total_start_time = datetime.now()
     
-    if 'user_id' not in session:
-        return jsonify({'error': 'User not authenticated'}), 401
-    
     data = request.json
     text = data['text']
     source_language = data['source_language']
@@ -196,43 +152,21 @@ def translate():
 
     app.logger.info(f"Starting translation request: {text[:100]}...")
     
-    translation_time = 0
-    interpretation_time = 0
-    
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        try:
-            translation_future = executor.submit(translate_text, text, source_language, target_language)
-            
-            if source_language == "영어":
-                interpretation_future = executor.submit(interpret_text, text, source_language, target_language)
-                translation, translation_time = translation_future.result()
-            else:
-                translation, translation_time = translation_future.result()
-                interpretation_future = executor.submit(interpret_text, translation, source_language, target_language)
-            
-            interpretation, interpretation_time = interpretation_future.result()
-            
-            save_start_time = datetime.now()
-            save_translation(session['user_id'], text, translation, source_language, target_language, interpretation)
-            save_time = (datetime.now() - save_start_time).total_seconds()
-            
-            total_time = (datetime.now() - total_start_time).total_seconds()
-            
-            return jsonify({
-                'translation': translation,
-                'interpretation': interpretation,
-                'timing': {
-                    'translation_time': translation_time,
-                    'interpretation_time': interpretation_time,
-                    'save_time': save_time,
-                    'total_time': total_time
-                }
-            })
-            
-        except Exception as e:
-            app.logger.error(f"Error in executor: {str(e)}")
-            app.logger.error(traceback.format_exc())
-            raise
+    try:
+        translation, translation_time = translate_text(text, source_language, target_language)
+        
+        return jsonify({
+            'translation': translation,
+            'timing': {
+                'translation_time': translation_time,
+                'total_time': (datetime.now() - total_start_time).total_seconds()
+            }
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error in translation: {str(e)}")
+        app.logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/get_translations', methods=['GET'])
 def get_translations():

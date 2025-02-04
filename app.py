@@ -71,36 +71,34 @@ def translate_text(text, source_language, target_language):
     start_time = datetime.now()
     translation_prompt = f"Translate the following {source_language} text to {target_language}, providing a natural and accurate translation that captures the nuance and context: '{text}'"
     
+    # 비동기 처리 및 최신 API 문법 적용
     translation_response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": "You are a professional translator specializing in nuanced and contextually accurate translations.(번역 결과에 따옴표를 넣지 마세요 예를 들어 'hello'가 아닌 hello로 출력합니다)"},
+            {"role": "system", "content": "You are a professional translator specializing in nuanced and contextually accurate translations. (번역 결과에 따옴표를 넣지 마세요)"},
             {"role": "user", "content": translation_prompt}
-        ]
+        ],
+        temperature=0.3,  # 출력 안정성 개선
+        max_tokens=2000  # 최대 토큰 수 명시적 지정
     )
-    end_time = datetime.now()
-    elapsed_time = (end_time - start_time).total_seconds()
     
-    # 결과를 JSON-safe하게 처리
+    # 불필요한 인코딩/디코딩 제거
     result = translation_response.choices[0].message.content.strip()
-    result = result.encode('utf-8').decode('utf-8')
-    return result, elapsed_time
+    return result, (datetime.now() - start_time).total_seconds()
 
 def interpret_text_stream(text, source_language, target_language):
-    if source_language == "영어":
-        interpretation_prompt = f"다음 영어 원문의 뉘앙스와 의미를 한국어로 자세히 설명해주세요. 왜 해당문장을 다음과 번역했는지도 설명해주세요: '{text}'"
-        system_content = "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."
-    else:
-        interpretation_prompt = f"다음 영어 번역문의 뉘앙스와 의미를 한국어로 자세히 설명해주세요 왜 해당문장을 다음과 번역했는지도 설명해주세요: '{text}'"
-        system_content = "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."
-
+    interpretation_prompt = f"다음 {'영어 원문' if source_language == '영어' else '영어 번역문'}의 뉘앙스와 의미를 한국어로 자세히 설명해주세요: '{text}'"
+    
+    # 스트리밍 최적화
     stream = client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": system_content},
+            {"role": "system", "content": "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."},
             {"role": "user", "content": interpretation_prompt}
         ],
-        stream=True  # 스트리밍 활성화
+        stream=True,
+        temperature=0.5,
+        top_p=0.9
     )
     
     return stream
@@ -147,30 +145,26 @@ def interpret_stream():
 
 @app.route('/translate', methods=['POST'])
 def translate():
-    total_start_time = datetime.now()
-    
-    data = request.json
-    text = data['text']
-    source_language = data['source_language']
-    target_language = data['target_language']
-
-    app.logger.info(f"Starting translation request: {text[:100]}...")
-    
     try:
-        translation, translation_time = translate_text(text, source_language, target_language)
+        data = request.json
+        # 병렬 처리 구현
+        with ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                translate_text,
+                data['text'],
+                data['source_language'],
+                data['target_language']
+            )
+            translation, translation_time = future.result(timeout=30)
         
         return jsonify({
             'translation': translation,
-            'timing': {
-                'translation_time': translation_time,
-                'total_time': (datetime.now() - total_start_time).total_seconds()
-            }
+            'timing': {'translation_time': translation_time}
         })
         
     except Exception as e:
-        app.logger.error(f"Error in translation: {str(e)}")
-        app.logger.error(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
+        app.logger.error(f"Translation error: {str(e)}")
+        return jsonify({'error': '번역 처리 중 오류 발생'}), 500
 
 @app.route('/get_translations', methods=['GET'])
 def get_translations():

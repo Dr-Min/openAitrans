@@ -103,6 +103,24 @@ def interpret_text_stream(text, source_language, target_language):
     
     return stream
 
+def interpret_text(text, source_language, target_language):
+    """텍스트 해석 함수 (비스트리밍)"""
+    start_time = datetime.now()
+    interpretation_prompt = f"다음 {'영어 원문' if source_language == '영어' else '영어 번역문'}의 뉘앙스와 의미를 한국어로 자세히 설명해주세요: '{text}'"
+    
+    interpretation_response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."},
+            {"role": "user", "content": interpretation_prompt}
+        ],
+        temperature=0.5,
+        max_tokens=2000
+    )
+    
+    result = interpretation_response.choices[0].message.content.strip()
+    return result, (datetime.now() - start_time).total_seconds()
+
 @app.route('/interpret_stream', methods=['POST'])
 def interpret_stream():
     data = request.json
@@ -247,29 +265,64 @@ def serve_manifest():
 
 @app.route('/translate_only', methods=['POST'])
 def translate_only():
-    data = request.json
-    text = data.get('text', '')
-    source_language = data.get('source_language', '')
-    target_language = data.get('target_language', '')
-    
     try:
+        # 요청 데이터 검증
+        if not request.json:
+            return jsonify({'error': '잘못된 요청 형식입니다.'}), 400
+            
+        data = request.json
+        text = data.get('text', '').strip()
+        source_language = data.get('source_language', '').strip()
+        target_language = data.get('target_language', '').strip()
+        
+        # 입력 검증
+        if not text:
+            return jsonify({'error': '번역할 텍스트를 입력해주세요.'}), 400
+        if not source_language or not target_language:
+            return jsonify({'error': '언어를 선택해주세요.'}), 400
+        
+        # OpenAI API 키 확인
+        if not os.getenv('OPENAI_API_KEY'):
+            app.logger.error("OpenAI API key not found")
+            return jsonify({'error': 'API 설정에 문제가 있습니다.'}), 500
+        
         translation, _ = translate_text(text, source_language, target_language)
         return jsonify({'translation': translation})
+        
     except Exception as e:
         app.logger.error(f"Translation error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        app.logger.error(traceback.format_exc())
+        return jsonify({'error': f'번역 중 오류가 발생했습니다: {str(e)}'}), 500
 
 @app.route('/interpret_and_save', methods=['POST'])
 def interpret_and_save():
-    data = request.json
-    text = data['text']
-    translation = data['translation']
-    source_language = data['source_language']
-    target_language = data['target_language']
-    
     try:
-        interpretation, interpretation_time = interpret_text(text if source_language == "영어" else translation, 
-                                                          source_language, target_language)
+        # 요청 데이터 검증
+        if not request.json:
+            return jsonify({'error': '잘못된 요청 형식입니다.'}), 400
+            
+        data = request.json
+        text = data.get('text', '').strip()
+        translation = data.get('translation', '').strip()
+        source_language = data.get('source_language', '').strip()
+        target_language = data.get('target_language', '').strip()
+        
+        # 입력 검증
+        if not text or not translation:
+            return jsonify({'error': '필수 데이터가 누락되었습니다.'}), 400
+        if not source_language or not target_language:
+            return jsonify({'error': '언어 정보가 누락되었습니다.'}), 400
+        
+        # OpenAI API 키 확인
+        if not os.getenv('OPENAI_API_KEY'):
+            app.logger.error("OpenAI API key not found")
+            return jsonify({'error': 'API 설정에 문제가 있습니다.'}), 500
+        
+        interpretation, interpretation_time = interpret_text(
+            text if source_language == "영어" else translation, 
+            source_language, 
+            target_language
+        )
         
         return jsonify({
             'interpretation': interpretation,
@@ -277,9 +330,11 @@ def interpret_and_save():
                 'interpretation_time': interpretation_time
             }
         })
+        
     except Exception as e:
         app.logger.error(f"Interpretation error: {str(e)}")
-        return jsonify({'error': '해석 중 오류가 발생했습니다.'}), 500
+        app.logger.error(traceback.format_exc())
+        return jsonify({'error': f'해석 중 오류가 발생했습니다: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)

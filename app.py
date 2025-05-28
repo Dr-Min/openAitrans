@@ -13,19 +13,27 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 
-
-app = Flask(__name__)
-app.secret_key = os.getenv('SECRET_KEY')
-app.permanent_session_lifetime = timedelta(days=90)
-
-# .env 파일에서 환경 변수 로드
+# .env 파일에서 환경 변수 로드 (로컬 개발용)
 load_dotenv()
 
-# OpenAI 클라이언트 초기화
-client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+app = Flask(__name__)
+app.secret_key = os.getenv('SECRET_KEY', 'fallback_secret_key_for_development')
+app.permanent_session_lifetime = timedelta(days=90)
 
-# 스레드 풀 생성
-executor = ThreadPoolExecutor(max_workers=10)
+# OpenAI 클라이언트 초기화 (글로벌 변수로 재사용)
+openai_client = None
+
+def get_openai_client():
+    global openai_client
+    if openai_client is None:
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            raise ValueError("OpenAI API 키가 설정되지 않았습니다.")
+        openai_client = OpenAI(api_key=api_key)
+    return openai_client
+
+# 스레드 풀 생성 (서버리스 환경에서는 제한적 사용)
+executor = ThreadPoolExecutor(max_workers=2)
 
 # 데이터베이스 연결
 def get_db():
@@ -71,55 +79,76 @@ def translate_text(text, source_language, target_language):
     start_time = datetime.now()
     translation_prompt = f"Translate the following {source_language} text to {target_language}, providing a natural and accurate translation that captures the nuance and context: '{text}'"
     
-    # 비동기 처리 및 최신 API 문법 적용
-    translation_response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "You are a professional translator specializing in nuanced and contextually accurate translations. (번역 결과에 따옴표를 넣지 마세요)"},
-            {"role": "user", "content": translation_prompt}
-        ],
-        temperature=0.3,  # 출력 안정성 개선
-        max_tokens=2000  # 최대 토큰 수 명시적 지정
-    )
-    
-    # 불필요한 인코딩/디코딩 제거
-    result = translation_response.choices[0].message.content.strip()
-    return result, (datetime.now() - start_time).total_seconds()
+    try:
+        client = get_openai_client()
+        # 비동기 처리 및 최신 API 문법 적용
+        translation_response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a professional translator specializing in nuanced and contextually accurate translations. (번역 결과에 따옴표를 넣지 마세요)"},
+                {"role": "user", "content": translation_prompt}
+            ],
+            temperature=0.3,  # 출력 안정성 개선
+            max_tokens=2000,  # 최대 토큰 수 명시적 지정
+            timeout=25  # 서버리스 환경에서 타임아웃 설정
+        )
+        
+        # 불필요한 인코딩/디코딩 제거
+        result = translation_response.choices[0].message.content.strip()
+        return result, (datetime.now() - start_time).total_seconds()
+        
+    except Exception as e:
+        app.logger.error(f"OpenAI API error in translate_text: {str(e)}")
+        raise Exception(f"번역 API 호출 실패: {str(e)}")
 
 def interpret_text_stream(text, source_language, target_language):
     interpretation_prompt = f"다음 {'영어 원문' if source_language == '영어' else '영어 번역문'}의 뉘앙스와 의미를 한국어로 자세히 설명해주세요: '{text}'"
     
-    # 스트리밍 최적화
-    stream = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."},
-            {"role": "user", "content": interpretation_prompt}
-        ],
-        stream=True,
-        temperature=0.5,
-        top_p=0.9
-    )
-    
-    return stream
+    try:
+        client = get_openai_client()
+        # 스트리밍 최적화
+        stream = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."},
+                {"role": "user", "content": interpretation_prompt}
+            ],
+            stream=True,
+            temperature=0.5,
+            top_p=0.9,
+            timeout=25
+        )
+        
+        return stream
+        
+    except Exception as e:
+        app.logger.error(f"OpenAI API error in interpret_text_stream: {str(e)}")
+        raise Exception(f"해석 API 호출 실패: {str(e)}")
 
 def interpret_text(text, source_language, target_language):
     """텍스트 해석 함수 (비스트리밍)"""
     start_time = datetime.now()
     interpretation_prompt = f"다음 {'영어 원문' if source_language == '영어' else '영어 번역문'}의 뉘앙스와 의미를 한국어로 자세히 설명해주세요: '{text}'"
     
-    interpretation_response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."},
-            {"role": "user", "content": interpretation_prompt}
-        ],
-        temperature=0.5,
-        max_tokens=2000
-    )
-    
-    result = interpretation_response.choices[0].message.content.strip()
-    return result, (datetime.now() - start_time).total_seconds()
+    try:
+        client = get_openai_client()
+        interpretation_response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "당신은 영어 표현의 뉘앙스를 한국어로 설명하는 전문가입니다."},
+                {"role": "user", "content": interpretation_prompt}
+            ],
+            temperature=0.5,
+            max_tokens=2000,
+            timeout=25
+        )
+        
+        result = interpretation_response.choices[0].message.content.strip()
+        return result, (datetime.now() - start_time).total_seconds()
+        
+    except Exception as e:
+        app.logger.error(f"OpenAI API error in interpret_text: {str(e)}")
+        raise Exception(f"해석 API 호출 실패: {str(e)}")
 
 @app.route('/interpret_stream', methods=['POST'])
 def interpret_stream():
@@ -268,6 +297,7 @@ def translate_only():
     try:
         # 요청 데이터 검증
         if not request.json:
+            app.logger.warning("Invalid request format - no JSON data")
             return jsonify({'error': '잘못된 요청 형식입니다.'}), 400
             
         data = request.json
@@ -275,24 +305,51 @@ def translate_only():
         source_language = data.get('source_language', '').strip()
         target_language = data.get('target_language', '').strip()
         
+        app.logger.info(f"Translation request: {len(text)} chars, {source_language} -> {target_language}")
+        
         # 입력 검증
         if not text:
+            app.logger.warning("Empty text provided")
             return jsonify({'error': '번역할 텍스트를 입력해주세요.'}), 400
         if not source_language or not target_language:
+            app.logger.warning(f"Missing languages: source={source_language}, target={target_language}")
             return jsonify({'error': '언어를 선택해주세요.'}), 400
         
         # OpenAI API 키 확인
-        if not os.getenv('OPENAI_API_KEY'):
-            app.logger.error("OpenAI API key not found")
+        try:
+            get_openai_client()  # 클라이언트 초기화 테스트
+        except ValueError as e:
+            app.logger.error(f"OpenAI API key error: {str(e)}")
             return jsonify({'error': 'API 설정에 문제가 있습니다.'}), 500
         
-        translation, _ = translate_text(text, source_language, target_language)
-        return jsonify({'translation': translation})
+        # 텍스트 길이 제한 (서버리스 환경 고려)
+        if len(text) > 5000:
+            app.logger.warning(f"Text too long: {len(text)} chars")
+            return jsonify({'error': '텍스트가 너무 깁니다. (최대 5000자)'}), 400
+        
+        # 번역 실행
+        translation, translation_time = translate_text(text, source_language, target_language)
+        
+        app.logger.info(f"Translation completed in {translation_time:.2f}s")
+        return jsonify({
+            'translation': translation,
+            'timing': {'translation_time': translation_time}
+        })
         
     except Exception as e:
-        app.logger.error(f"Translation error: {str(e)}")
+        error_msg = str(e)
+        app.logger.error(f"Translation error: {error_msg}")
         app.logger.error(traceback.format_exc())
-        return jsonify({'error': f'번역 중 오류가 발생했습니다: {str(e)}'}), 500
+        
+        # 더 구체적인 에러 메시지 제공
+        if "API 호출 실패" in error_msg:
+            return jsonify({'error': error_msg}), 500
+        elif "timeout" in error_msg.lower():
+            return jsonify({'error': '요청 시간이 초과되었습니다. 다시 시도해주세요.'}), 504
+        elif "rate limit" in error_msg.lower():
+            return jsonify({'error': 'API 사용량 한도에 도달했습니다. 잠시 후 다시 시도해주세요.'}), 429
+        else:
+            return jsonify({'error': f'번역 중 오류가 발생했습니다: {error_msg}'}), 500
 
 @app.route('/interpret_and_save', methods=['POST'])
 def interpret_and_save():
@@ -338,3 +395,7 @@ def interpret_and_save():
 
 if __name__ == '__main__':
     app.run(debug=True)
+
+# Vercel 서버리스 함수용 핸들러
+def handler(request):
+    return app(request.environ, lambda *args: None)

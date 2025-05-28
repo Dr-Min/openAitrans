@@ -6,15 +6,18 @@ import traceback
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
-from dotenv import load_dotenv
+# 서버리스 환경에서 안전한 import
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # 로컬 개발용
+except ImportError:
+    pass  # 서버리스 환경에서는 python-dotenv가 없을 수도 있음
+
 from flask import Flask, g, jsonify, redirect, render_template, request, send_file, session, url_for, Response, stream_with_context, flash
 from openai import OpenAI
 from werkzeug.security import check_password_hash, generate_password_hash
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
-
-# .env 파일에서 환경 변수 로드 (로컬 개발용)
-load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'fallback_secret_key_for_development')
@@ -26,23 +29,32 @@ openai_client = None
 def get_openai_client():
     global openai_client
     if openai_client is None:
-        api_key = os.getenv('OPENAI_API_KEY')
-        if not api_key:
-            raise ValueError("OpenAI API 키가 설정되지 않았습니다.")
-        
-        # 개행 문자, 공백, 따옴표 제거 (중요!)
-        api_key = api_key.strip().strip('"').strip("'")
-        
-        # API 키 형식 검증
-        if not api_key.startswith('sk-'):
-            raise ValueError("유효하지 않은 OpenAI API 키 형식입니다.")
-        
-        # 길이 검증 (일반적으로 OpenAI API 키는 매우 긺)
-        if len(api_key) < 50:
-            raise ValueError("API 키가 너무 짧습니다.")
+        try:
+            api_key = os.getenv('OPENAI_API_KEY')
+            if not api_key:
+                app.logger.error("OPENAI_API_KEY environment variable not found")
+                raise ValueError("OpenAI API 키가 설정되지 않았습니다.")
             
-        app.logger.info(f"OpenAI API 키 로드 완료 (길이: {len(api_key)})")
-        openai_client = OpenAI(api_key=api_key)
+            # 개행 문자, 공백, 따옴표 제거 (중요!)
+            api_key = api_key.strip().strip('"').strip("'")
+            
+            # API 키 형식 검증
+            if not api_key.startswith('sk-'):
+                app.logger.error(f"Invalid API key format. Key starts with: {api_key[:10]}...")
+                raise ValueError("유효하지 않은 OpenAI API 키 형식입니다.")
+            
+            # 길이 검증 (일반적으로 OpenAI API 키는 매우 긺)
+            if len(api_key) < 50:
+                app.logger.error(f"API key too short: {len(api_key)} characters")
+                raise ValueError("API 키가 너무 짧습니다.")
+                
+            app.logger.info(f"OpenAI API 키 로드 완료 (길이: {len(api_key)})")
+            openai_client = OpenAI(api_key=api_key)
+            
+        except Exception as e:
+            app.logger.error(f"Failed to initialize OpenAI client: {str(e)}")
+            raise
+            
     return openai_client
 
 # 스레드 풀 생성 (서버리스 환경에서는 제한적 사용)
@@ -68,6 +80,15 @@ def init_db():
 def index():
     # 임시로 세션 검사 제거
     return render_template('index.html')
+
+@app.route('/health')
+def health():
+    """헬스체크 엔드포인트"""
+    return jsonify({
+        'status': 'healthy',
+        'message': 'Flask app is running',
+        'has_openai_key': bool(os.getenv('OPENAI_API_KEY'))
+    })
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -447,6 +468,6 @@ def test_api():
 if __name__ == '__main__':
     app.run(debug=True)
 
-# Vercel 서버리스 함수용 핸들러
-def handler(request):
-    return app(request.environ, lambda *args: None)
+# Vercel 서버리스 함수용 - 이것이 핵심!
+# Vercel은 app 변수를 찾아서 WSGI 앱으로 실행합니다
+# 추가 핸들러 불필요

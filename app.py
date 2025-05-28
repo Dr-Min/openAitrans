@@ -193,7 +193,7 @@ def export_db():
     
     temp_file_path = None
     try:
-        # 임시 파일 생성
+        # 임시 파일 생성 ㅎㅇㅇ
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
         temp_file_path = temp_file.name
         temp_file.close()

@@ -29,6 +29,19 @@ def get_openai_client():
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
             raise ValueError("OpenAI API 키가 설정되지 않았습니다.")
+        
+        # 개행 문자, 공백, 따옴표 제거 (중요!)
+        api_key = api_key.strip().strip('"').strip("'")
+        
+        # API 키 형식 검증
+        if not api_key.startswith('sk-'):
+            raise ValueError("유효하지 않은 OpenAI API 키 형식입니다.")
+        
+        # 길이 검증 (일반적으로 OpenAI API 키는 매우 긺)
+        if len(api_key) < 50:
+            raise ValueError("API 키가 너무 짧습니다.")
+            
+        app.logger.info(f"OpenAI API 키 로드 완료 (길이: {len(api_key)})")
         openai_client = OpenAI(api_key=api_key)
     return openai_client
 
@@ -284,6 +297,21 @@ def export_db():
             except Exception as e:
                 app.logger.error(f"Error deleting temporary file: {str(e)}")
 
+@app.route('/debug_env', methods=['GET'])
+def debug_env():
+    """환경 변수 디버깅용 엔드포인트 (운영 환경에서는 제거 필요)"""
+    try:
+        api_key = os.getenv('OPENAI_API_KEY')
+        return jsonify({
+            'has_api_key': bool(api_key),
+            'api_key_length': len(api_key) if api_key else 0,
+            'api_key_starts_with_sk': api_key.startswith('sk-') if api_key else False,
+            'api_key_first_10': api_key[:10] if api_key else 'None',
+            'all_env_keys': list(os.environ.keys())
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/static/service-worker.js')
 def serve_service_worker():
     return app.send_static_file('service-worker.js')
@@ -392,6 +420,29 @@ def interpret_and_save():
         app.logger.error(f"Interpretation error: {str(e)}")
         app.logger.error(traceback.format_exc())
         return jsonify({'error': f'해석 중 오류가 발생했습니다: {str(e)}'}), 500
+
+@app.route('/test_api', methods=['GET'])
+def test_api():
+    """API 연결 테스트 엔드포인트"""
+    try:
+        client = get_openai_client()
+        # 매우 간단한 API 호출로 테스트
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
+            max_tokens=5
+        )
+        return jsonify({
+            'success': True,
+            'response': response.choices[0].message.content
+        })
+    except Exception as e:
+        app.logger.error(f"API test error: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'error_type': type(e).__name__
+        }), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
